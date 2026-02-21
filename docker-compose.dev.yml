@@ -1,0 +1,474 @@
+# version: '3.8'
+
+services:
+  # ==========================================================================
+  # DATABASE
+  # ==========================================================================
+  postgres:
+    image: postgres:14-alpine
+    container_name: deeptrust-postgres
+    environment:
+      POSTGRES_USER: deeptrust
+      POSTGRES_PASSWORD: deeptrust_dev_password
+      POSTGRES_DB: deeptrust
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deeptrust"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - deeptrust-network
+
+  # ==========================================================================
+  # CACHE
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: deeptrust-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - deeptrust-network
+
+  # ==========================================================================
+  # MESSAGE QUEUE
+  # ==========================================================================
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: deeptrust-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: deeptrust
+      RABBITMQ_DEFAULT_PASS: deeptrust_dev_password
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - deeptrust-network
+
+  # ==========================================================================
+  # STORAGE (MinIO - S3 Compatible)
+  # ==========================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: deeptrust-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: deeptrust
+      MINIO_ROOT_PASSWORD: deeptrust_dev_password
+    ports:
+      - "9000:9000"    # API
+      - "9001:9001"    # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - deeptrust-network
+
+  # ==========================================================================
+  # BACKEND SERVICES
+  # ==========================================================================
+  
+  # Auth Service
+  auth:
+    build:
+      context: ./backend/services/auth
+      dockerfile: Dockerfile
+    container_name: deeptrust-auth
+    environment:
+      DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: dev_secret_key_change_in_production
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      ENV: development
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      PYTHONPATH: /app
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/services/auth/app:/app/app
+      - ./backend/shared:/app/shared
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    networks:
+      - deeptrust-network
+  # auth:
+  #   build:
+  #     context: ./backend/services/auth
+  #     dockerfile: Dockerfile
+  #   container_name: deeptrust-auth
+  #   environment:
+  #     DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+  #     REDIS_URL: redis://redis:6379
+  #     SECRET_KEY: dev_secret_key_change_in_production
+  #     ACCESS_TOKEN_EXPIRE_MINUTES: 30
+  #     ENV: development
+  #     ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+  #   ports:
+  #     - "8001:8001"
+  #   volumes:
+  #     - ./backend/services/auth/app:/app/app
+  #     - ./backend/shared:/app/shared
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+  #   networks:
+  #     - deeptrust-network
+
+  # Analysis Service
+  analysis:
+    build:
+      context: ./backend/services/analysis
+      dockerfile: Dockerfile
+    container_name: deeptrust-analysis
+    environment:
+      DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://deeptrust:deeptrust_dev_password@rabbitmq:5672
+      MODELS_SERVICE_URL: http://models:8003
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: deeptrust
+      MINIO_SECRET_KEY: deeptrust_dev_password
+      ENV: development
+      PYTHONPATH: /app
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./backend/services/analysis/app:/app/app
+      - ./backend/shared:/app/shared
+      - analysis_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+    networks:
+      - deeptrust-network
+
+  # analysis:
+  #   build:
+  #     context: ./backend/services/analysis
+  #     dockerfile: Dockerfile
+  #   container_name: deeptrust-analysis
+  #   environment:
+  #     DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+  #     REDIS_URL: redis://redis:6379
+  #     RABBITMQ_URL: amqp://deeptrust:deeptrust_dev_password@rabbitmq:5672
+  #     MODELS_SERVICE_URL: http://models:8003
+  #     MINIO_ENDPOINT: minio:9000
+  #     MINIO_ACCESS_KEY: deeptrust
+  #     MINIO_SECRET_KEY: deeptrust_dev_password
+  #     ENV: development
+  #   ports:
+  #     - "8002:8002"
+  #   volumes:
+  #     - ./backend/services/analysis/app:/app/app
+  #     - ./backend/shared:/app/shared
+  #     - analysis_uploads:/app/uploads
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #     rabbitmq:
+  #       condition: service_healthy
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+  #   networks:
+  #     - deeptrust-network
+
+  # Models Service
+  models:
+    build:
+      context: ./backend/services/models
+      dockerfile: Dockerfile
+    container_name: deeptrust-models
+    environment:
+      REDIS_URL: redis://redis:6379
+      MODEL_PATH: /app/weights
+      ENV: development
+      PYTHONPATH: /app
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./backend/services/models/app:/app/app
+      - ./backend/services/models/weights:/app/weights
+      - ./backend/shared:/app/shared
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+    networks:
+      - deeptrust-network
+
+  
+  # models:
+  #   build:
+  #     context: ./backend/services/models
+  #     dockerfile: Dockerfile
+  #   container_name: deeptrust-models
+  #   environment:
+  #     REDIS_URL: redis://redis:6379
+  #     MODEL_PATH: /app/weights
+  #     ENV: development
+  #   ports:
+  #     - "8003:8003"
+  #   volumes:
+  #     - ./backend/services/models/app:/app/app
+  #     - ./backend/services/models/weights:/app/weights
+  #     - ./backend/shared:/app/shared
+  #   depends_on:
+  #     - redis
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 4G
+  #       reservations:
+  #         memory: 2G
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+  #   networks:
+  #     - deeptrust-network
+
+  # API Gateway
+  gateway:
+    build:
+      context: ./backend/services/gateway
+      dockerfile: Dockerfile
+    container_name: deeptrust-gateway
+    environment:
+      AUTH_SERVICE_URL: http://auth:8001
+      ANALYSIS_SERVICE_URL: http://analysis:8002
+      MODELS_SERVICE_URL: http://models:8003
+      REDIS_URL: redis://redis:6379
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      ENV: development
+      PYTHONPATH: /app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/services/gateway/app:/app/app
+      - ./backend/shared:/app/shared
+    depends_on:
+      - auth
+      - analysis
+      - models
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - deeptrust-network
+  # gateway:
+  #   build:
+  #     context: ./backend/services/gateway
+  #     dockerfile: Dockerfile
+  #   container_name: deeptrust-gateway
+  #   environment:
+  #     AUTH_SERVICE_URL: http://auth:8001
+  #     ANALYSIS_SERVICE_URL: http://analysis:8002
+  #     MODELS_SERVICE_URL: http://models:8003
+  #     REDIS_URL: redis://redis:6379
+  #     ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+  #     ENV: development
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - ./backend/services/gateway/app:/app/app
+  #     - ./backend/shared:/app/shared
+  #   depends_on:
+  #     - auth
+  #     - analysis
+  #     - models
+  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  #   networks:
+  #     - deeptrust-network
+
+  # ==========================================================================
+  # WORKERS
+  # ==========================================================================
+
+
+  worker:
+    build:
+      context: ./backend/services/analysis
+      dockerfile: Dockerfile
+    container_name: deeptrust-worker
+    environment:
+      DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://deeptrust:deeptrust_dev_password@rabbitmq:5672
+      MODELS_SERVICE_URL: http://models:8003
+      ENV: development
+      PYTHONPATH: /app
+    volumes:
+      - ./backend/services/analysis/app:/app/app
+      - ./backend/shared:/app/shared
+    depends_on:
+      - rabbitmq
+      - models
+    command: celery -A app.workers.analysis_worker worker --loglevel=info
+    networks:
+      - deeptrust-network
+  # worker:
+  #   build:
+  #     context: ./backend/services/analysis
+  #     dockerfile: Dockerfile
+  #   container_name: deeptrust-worker
+  #   environment:
+  #     DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+  #     REDIS_URL: redis://redis:6379
+  #     RABBITMQ_URL: amqp://deeptrust:deeptrust_dev_password@rabbitmq:5672
+  #     MODELS_SERVICE_URL: http://models:8003
+  #     ENV: development
+  #   volumes:
+  #     - ./backend/services/analysis/app:/app/app
+  #     - ./backend/shared:/app/shared
+  #   depends_on:
+  #     - rabbitmq
+  #     - models
+  #   command: celery -A app.workers.analysis_worker worker --loglevel=info
+  #   networks:
+  #     - deeptrust-network
+
+  # ==========================================================================
+  # FRONTEND
+  # ==========================================================================
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile.dev
+  #   container_name: deeptrust-frontend
+  #   environment:
+  #     VITE_API_URL: http://localhost:8000
+  #     VITE_WS_URL: ws://localhost:8000
+  #   ports:
+  #     - "5173:5173"
+  #   # volumes:
+  #   #   - ./frontend/src:/app/src
+  #   #   - ./frontend/public:/app/public
+  #   #   - frontend_node_modules:/app/node_modules
+  #   volumes:
+  #   - ./frontend:/app
+  #   - /app/node_modules
+
+  #   command: npm run dev -- --host 0.0.0.0
+  #   networks:
+  #     - deeptrust-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: deeptrust-frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000
+      HOST: 0.0.0.0        # Important for Windows
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+    networks:
+      - deeptrust-network
+
+
+  # ==========================================================================
+  # MONITORING
+  # ==========================================================================
+  
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: deeptrust-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - deeptrust-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: deeptrust-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - deeptrust-network
+
+# ==============================================================================
+# NETWORKS
+# ==============================================================================
+networks:
+  deeptrust-network:
+    driver: bridge
+    name: deeptrust-network
+
+# ==============================================================================
+# VOLUMES
+# ==============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  minio_data:
+    driver: local
+  analysis_uploads:
+    driver: local
+  frontend_node_modules:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+
+

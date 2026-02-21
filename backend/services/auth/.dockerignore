@@ -1,0 +1,7 @@
+.Python
+.git
+.env
+.venv
+venv
+*.log
+.pytest_cache

@@ -90,7 +90,7 @@ async def health():
 async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")
-
++
     if db.query(User).filter(User.email == user_data.email).first():
         raise HTTPException(status_code=400, detail="Email already exists")
 

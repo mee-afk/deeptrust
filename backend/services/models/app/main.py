@@ -101,31 +101,71 @@ async def health():
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """
-    Predict if uploaded image/video is a deepfake.
-    
-    Returns complete ensemble analysis with all model predictions.
-    """
+    """Predict if uploaded image/video is a deepfake."""
     if not ensemble:
         raise HTTPException(status_code=503, detail="Models not loaded")
     
     try:
-        # Read uploaded file
         contents = await file.read()
-        
-        # Open as PIL Image
         image = Image.open(io.BytesIO(contents))
         
-        # Convert to RGB if needed
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
         logger.info(f"🔍 Analyzing {file.filename} ({image.size})")
         
+        # Face validation with error handling
+        try:
+            import cv2
+            import numpy as np
+            
+            img_array = np.array(image)
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            
+            face_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            )
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            
+            if len(faces) == 0:
+                logger.warning(f"⚠️ No face detected in {file.filename}")
+                return {
+                    "is_deepfake": False,
+                    "confidence_score": 0.0,
+                    "ensemble_score": 0.5,
+                    "error": "no_face_detected",
+                    "message": "No human face detected in image. Results may be unreliable.",
+                    "model_scores": {
+                        "mesonet": 0.5,
+                        "xception": 0.5,
+                        "frequency": 0.5,
+                        "biological": 0.5
+                    },
+                    "voting": {
+                        "fake_votes": 0,
+                        "real_votes": 0
+                    },
+                    "ensemble_weights": {
+                        "mesonet": 0.3,
+                        "xception": 0.35,
+                        "frequency": 0.2,
+                        "biological": 0.15
+                    },
+                    "file_info": {
+                        "filename": file.filename,
+                        "size": len(contents),
+                        "dimensions": image.size,
+                        "format": image.format
+                    }
+                }
+            
+            logger.info(f"✅ Detected {len(faces)} face(s)")
+        except Exception as face_error:
+            logger.warning(f"⚠️ Face detection failed: {face_error}, continuing anyway...")
+        
         # Run ensemble prediction
         result = ensemble.predict(image)
         
-        # Add metadata
         result['file_info'] = {
             'filename': file.filename,
             'size': len(contents),

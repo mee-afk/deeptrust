@@ -1,0 +1,23 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy source
+COPY . .
+
+# Expose port
+EXPOSE 5173
+
+# Use environment variable to force host binding
+ENV HOST=0.0.0.0
+
+# Start dev server
+# CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+CMD ["npm", "run", "dev"]
+

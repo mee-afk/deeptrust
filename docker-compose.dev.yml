@@ -266,6 +266,48 @@ services:
   #     - deeptrust-network
 
   # API Gateway
+
+
+  # DeepTrust V2 — Trained Ensemble Service
+  deeptrust-v2:
+    build:
+      context: ./deeptrust-training          # path to your deeptrust-training folder
+      dockerfile: Dockerfile.deeptrust       # the Dockerfile we created
+    container_name: deeptrust-v2
+    environment:
+      MESONET_PATH:    /app/models/mesonet_final_157k.pth
+      XCEPTION_PATH:   /app/models/xceptionnet_final.pth
+      CALIBRATOR_PATH: /app/models/platt_calibrator.pkl
+      GRADCAM_DIR:     /app/outputs/gradcam
+      ENV:             development
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount model weights directly — no need to copy into image each time
+      - ./deeptrust-training/models:/app/models:ro
+      - ./deeptrust-training/outputs:/app/outputs
+      # Mount code for hot-reload during development
+      - ./deeptrust-training/notebooks/api.py:/app/api.py
+      - ./deeptrust-training/notebooks/ensemble.py:/app/ensemble.py
+      - ./deeptrust-training/notebooks/models.py:/app/models.py
+      - ./deeptrust-training/notebooks/gradcam.py:/app/gradcam.py
+      - ./deeptrust-training/notebooks/utils.py:/app/utils.py
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s       # give PyTorch time to load models
+    networks:
+      - deeptrust-network
+
+
   gateway:
     build:
       context: ./backend/services/gateway
@@ -275,6 +317,7 @@ services:
       AUTH_SERVICE_URL: http://auth:8001
       ANALYSIS_SERVICE_URL: http://analysis:8002
       MODELS_SERVICE_URL: http://models:8003
+      DEEPTRUST_V2_URL: http://deeptrust-v2:8080
       REDIS_URL: redis://redis:6379
       ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
       ENV: development

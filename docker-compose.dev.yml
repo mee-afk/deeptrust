@@ -271,7 +271,7 @@ services:
   # DeepTrust V2 — Trained Ensemble Service
   deeptrust-v2:
     build:
-      context: ./deeptrust-training          # path to your deeptrust-training folder
+      context: ../deeptrust-training          # path to your deeptrust-training folder
       dockerfile: Dockerfile.deeptrust       # the Dockerfile we created
     container_name: deeptrust-v2
     environment:
@@ -281,17 +281,18 @@ services:
       GRADCAM_DIR:     /app/outputs/gradcam
       ENV:             development
     ports:
-      - "8080:8080"
+      - "8090:8080"
     volumes:
       # Mount model weights directly — no need to copy into image each time
-      - ./deeptrust-training/models:/app/models:ro
-      - ./deeptrust-training/outputs:/app/outputs
+      - ../deeptrust-training/models:/app/models:ro
+      - ../deeptrust-training/outputs:/app/outputs
       # Mount code for hot-reload during development
-      - ./deeptrust-training/notebooks/api.py:/app/api.py
-      - ./deeptrust-training/notebooks/ensemble.py:/app/ensemble.py
-      - ./deeptrust-training/notebooks/models.py:/app/models.py
-      - ./deeptrust-training/notebooks/gradcam.py:/app/gradcam.py
-      - ./deeptrust-training/notebooks/utils.py:/app/utils.py
+      - ../deeptrust-training/notebooks/api.py:/app/api.py
+      - ../deeptrust-training/notebooks/ensemble_final.py:/app/ensemble.py
+      - ../deeptrust-training/notebooks/models.py:/app/models.py
+      - ../deeptrust-training/notebooks/gradcam.py:/app/gradcam.py
+      - ../deeptrust-training/notebooks/utils.py:/app/utils.py
+
     deploy:
       resources:
         limits:
@@ -317,7 +318,7 @@ services:
       AUTH_SERVICE_URL: http://auth:8001
       ANALYSIS_SERVICE_URL: http://analysis:8002
       MODELS_SERVICE_URL: http://models:8003
-      DEEPTRUST_V2_URL: http://deeptrust-v2:8080
+      DEEPTRUST_V2_URL: http://deeptrust-v2:8090
       REDIS_URL: redis://redis:6379
       ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
       ENV: development
@@ -364,27 +365,27 @@ services:
   # ==========================================================================
 
 
-  worker:
-    build:
-      context: ./backend/services/analysis
-      dockerfile: Dockerfile
-    container_name: deeptrust-worker
-    environment:
-      DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
-      REDIS_URL: redis://redis:6379
-      RABBITMQ_URL: amqp://deeptrust:deeptrust_dev_password@rabbitmq:5672
-      MODELS_SERVICE_URL: http://models:8003
-      ENV: development
-      PYTHONPATH: /app
-    volumes:
-      - ./backend/services/analysis/app:/app/app
-      - ./backend/shared:/app/shared
-    depends_on:
-      - rabbitmq
-      - models
-    command: celery -A app.workers.analysis_worker worker --loglevel=info
-    networks:
-      - deeptrust-network
+  # worker:
+  #   build:
+  #     context: ./backend/services/analysis
+  #     dockerfile: Dockerfile
+  #   container_name: deeptrust-worker
+  #   environment:
+  #     DATABASE_URL: postgresql://deeptrust:deeptrust_dev_password@postgres:5432/deeptrust
+  #     REDIS_URL: redis://redis:6379
+  #     RABBITMQ_URL: amqp://deeptrust:deeptrust_dev_password@rabbitmq:5672
+  #     MODELS_SERVICE_URL: http://models:8003
+  #     ENV: development
+  #     PYTHONPATH: /app
+  #   volumes:
+  #     - ./backend/services/analysis/app:/app/app
+  #     - ./backend/shared:/app/shared
+  #   depends_on:
+  #     - rabbitmq
+  #     - models
+  #   command: celery -A app.workers.analysis_worker worker --loglevel=info
+  #   networks:
+  #     - deeptrust-network
   # worker:
   #   build:
   #     context: ./backend/services/analysis
@@ -453,36 +454,36 @@ services:
   # ==========================================================================
   
   # Prometheus
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: deeptrust-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    networks:
-      - deeptrust-network
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: deeptrust-prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus_data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #   networks:
+  #     - deeptrust-network
 
   # Grafana
-  grafana:
-    image: grafana/grafana:latest
-    container_name: deeptrust-grafana
-    ports:
-      - "3001:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infrastructure/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-    depends_on:
-      - prometheus
-    networks:
-      - deeptrust-network
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: deeptrust-grafana
+  #   ports:
+  #     - "3001:3000"
+  #   environment:
+  #     GF_SECURITY_ADMIN_USER: admin
+  #     GF_SECURITY_ADMIN_PASSWORD: admin
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #     - ./infrastructure/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+  #   depends_on:
+  #     - prometheus
+  #   networks:
+  #     - deeptrust-network
 
 # ==============================================================================
 # NETWORKS

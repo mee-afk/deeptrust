@@ -46,8 +46,8 @@ ensemble = None
 async def startup():
     global mesonet, xception, frequency, biological, ensemble
     
-    print("🚀 Starting Models Service...")
-    print("📦 Loading ML models...")
+    logger.info("Starting Models Service...")
+    logger.info("Loading ML models...")
     
     try:
         # Initialize all models
@@ -59,10 +59,10 @@ async def startup():
         # Create ensemble
         ensemble = EnsembleDetector(mesonet, xception, frequency, biological)
         
-        print("✅ All models loaded successfully")
+        logger.info("All models loaded successfully")
         
     except Exception as e:
-        print(f"❌ Model loading failed: {e}")
+        logger.error(f"Model loading failed: {e}")
         raise
 
 

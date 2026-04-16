@@ -1,29 +1,32 @@
 import axios from 'axios';
 import {
-  BarChart3, Brain, CheckCircle,
+  AlertCircle,
+  BarChart3, Brain,
   Eye,
   FlaskConical,
-  Layers, Upload, XCircle
+  Info,
+  Layers,
+  ShieldAlert,
+  ShieldCheck,
+  Upload
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 
-// ── Config ────────────────────────────────────────────────────────────────────
-const GATEWAY_URL = 'http://localhost:8000';
+const GATEWAY_URL = 'http://localhost:8010';
 const AUTH_URL    = 'http://localhost:8001';
 
 const DeepTrustDetector = () => {
-  const [file,          setFile]          = useState(null);
-  const [preview,       setPreview]       = useState(null);
-  const [analyzing,     setAnalyzing]     = useState(false);
-  const [results,       setResults]       = useState(null);
-  const [activeTab,     setActiveTab]     = useState('overview');
-  const [token,         setToken]         = useState('');
-  const [modelVersion,  setModelVersion]  = useState('v2');   // 'v1' or 'v2'
-  const [gradcamView,   setGradcamView]   = useState('xceptionnet'); // 'mesonet' or 'xceptionnet'
-  const [error,         setError]         = useState(null);
+  const [file,         setFile]         = useState(null);
+  const [preview,      setPreview]      = useState(null);
+  const [analyzing,    setAnalyzing]    = useState(false);
+  const [results,      setResults]      = useState(null);
+  const [activeTab,    setActiveTab]    = useState('overview');
+  const [token,        setToken]        = useState('');
+  const [modelVersion, setModelVersion] = useState('v2');
+  const [gradcamView,  setGradcamView]  = useState('xceptionnet');
+  const [error,        setError]        = useState(null);
   const fileInputRef = useRef(null);
 
-  // ── Auto-login ──────────────────────────────────────────────────────────────
   useState(() => {
     const autoLogin = async () => {
       try {
@@ -33,38 +36,32 @@ const DeepTrustDetector = () => {
         const response = await axios.post(`${AUTH_URL}/token`, formData);
         setToken(response.data.access_token);
       } catch (err) {
-        console.warn('Auto-login failed — continuing without auth:', err.message);
+        console.warn('Auth not available');
       }
     };
     autoLogin();
   }, []);
 
-  // ── File selection ──────────────────────────────────────────────────────────
   const handleFileSelect = (e) => {
     const selectedFile = e.target.files[0];
     if (!selectedFile) return;
-    const isMedia = selectedFile.type.startsWith('image/') ||
-                    selectedFile.type.startsWith('video/');
+    const isMedia = selectedFile.type.startsWith('image/') || selectedFile.type.startsWith('video/');
     if (!isMedia) return;
-
     setFile(selectedFile);
     setResults(null);
     setError(null);
-
+    setActiveTab('overview');
     const reader = new FileReader();
     reader.onloadend = () => setPreview(reader.result);
     reader.readAsDataURL(selectedFile);
   };
 
-  // ── Analysis ────────────────────────────────────────────────────────────────
   const analyzeMedia = async () => {
     if (!file) return;
     setAnalyzing(true);
     setError(null);
     setResults(null);
-
     try {
-      // Optional: upload to Analysis Service for DB record
       if (token) {
         const uploadData = new FormData();
         uploadData.append('file', file);
@@ -72,549 +69,527 @@ const DeepTrustDetector = () => {
           await axios.post(`${GATEWAY_URL}/api/upload`, uploadData, {
             headers: { Authorization: `Bearer ${token}` }
           });
-        } catch (uploadErr) {
-          console.warn('Upload to analysis service failed (non-fatal):', uploadErr.message);
-        }
+        } catch (e) { /* non-fatal */ }
       }
-
-      // Main prediction via Gateway
       const predictData = new FormData();
       predictData.append('file', file);
-
       const response = await axios.post(
         `${GATEWAY_URL}/api/analyze?model_version=${modelVersion}&gradcam=true`,
         predictData
       );
-
-      const data = response.data;
-      setResults(transformResponse(data, modelVersion));
-
+      setResults(transformResponse(response.data, modelVersion));
     } catch (err) {
-      const detail = err.response?.data?.detail || err.message;
-      setError(`Analysis failed: ${detail}`);
-      console.error('Analysis error:', err);
+      setError(`Analysis failed: ${err.response?.data?.detail || err.message}`);
     } finally {
       setAnalyzing(false);
     }
   };
 
-  // ── Transform backend response to UI shape ──────────────────────────────────
   const transformResponse = (data, version) => {
+
+    // NO_FACE — image has no human face detected
+    if (data.error === 'no_face_detected' || data.verdict === 'NO_FACE') {
+      return {
+        isDeepfake:        false,
+        verdict:           'NO_FACE',
+        noFace:            true,
+        confidence:        0,
+        confidencePct:     'N/A',
+        ensembleScore:     0,
+        calibrationActive: false,
+        modelVersion:      version,
+        explanation:       data.explanation,
+        mesoFakeScore:     0, xceptFakeScore: 0,
+        mesoRealPct:       '0', xceptRealPct: '0',
+        mesoFakePct:       '0', xceptFakePct: '0',
+        models: {
+          mesonet:  { score: 0, weight: 0.55, version: 'V2', dfdc: '93.41%' },
+          xception: { score: 0, weight: 0.45, version: 'V2', dfdc: '93.20%' }
+        },
+        gradcam:      null,
+        ensembleInfo: null,
+        raw:          data
+      };
+    }
+
     const isV2   = version === 'v2';
-    const isFake = data.is_deepfake;
-
-    // Confidence — V2 uses calibrated, V1 uses raw
-    const confidence = isV2
-      ? (data.calibrated_score ?? data.confidence_score ?? data.ensemble_score)
-      : data.ensemble_score;
-
-    // Displayed confidence is always P(correct verdict)
-    const displayConf = isFake ? confidence : (isV2 ? 1 - (data.calibrated_score ?? data.ensemble_score) : 1 - confidence);
+    const isFake = data.verdict === 'FAKE' || data.is_deepfake === true;
+    const mesoScore  = data.model_scores?.mesonet  ?? data.mesonet?.score  ?? 0.5;
+    const xceptScore = data.model_scores?.xception ?? data.xceptionnet?.score ?? 0.5;
+    const confidence = data.confidence ?? 0.5;
+    const displayConf = isFake ? confidence : 1.0 - (data.ensemble_score ?? 0.5);
 
     return {
-      isDeepfake:       isFake,
-      verdict:          isFake ? 'FAKE' : 'REAL',
-      confidence:       Math.max(0, Math.min(1, displayConf)),
-      confidencePct:    data.confidence_pct ?? `${(Math.max(0, Math.min(1, displayConf)) * 100).toFixed(2)}%`,
-      ensembleScore:    data.ensemble_score,
+      isDeepfake:        isFake,
+      verdict:           isFake ? 'FAKE' : 'REAL',
+      confidence:        Math.max(0, Math.min(1, displayConf)),
+      confidencePct:     data.confidence_pct ?? `${(Math.max(0, Math.min(1, displayConf)) * 100).toFixed(2)}%`,
+      ensembleScore:     data.ensemble_score ?? 0,
       calibrationActive: data.calibration_active ?? false,
-      modelVersion:     version,
-      explanation:      data.explanation ?? '',
-
-      // Model scores
+      modelVersion:      version,
+      explanation:       data.explanation ?? '',
+      mesoFakeScore:     mesoScore,
+      xceptFakeScore:    xceptScore,
+      mesoRealPct:       ((1 - mesoScore) * 100).toFixed(1),
+      xceptRealPct:      ((1 - xceptScore) * 100).toFixed(1),
+      mesoFakePct:       (mesoScore * 100).toFixed(1),
+      xceptFakePct:      (xceptScore * 100).toFixed(1),
       models: {
         mesonet: {
-          score:   data.model_scores?.mesonet  ?? 0.5,
-          weight:  data.ensemble_weights?.mesonet  ?? (isV2 ? 0.55 : 0.30),
+          score:   mesoScore,
+          weight:  data.ensemble_weights?.mesonet ?? data.mesonet?.weight ?? (isV2 ? 0.55 : 0.30),
           version: isV2 ? 'V2 (trained)' : 'V1 (heuristic)',
-          dfdc:    isV2 ? '93.41%' : 'N/A'
+          dfdc:    isV2 ? '93.41%' : 'N/A',
         },
         xception: {
-          score:   data.model_scores?.xception ?? 0.5,
-          weight:  data.ensemble_weights?.xception ?? (isV2 ? 0.45 : 0.35),
+          score:   xceptScore,
+          weight:  data.ensemble_weights?.xception ?? data.xceptionnet?.weight ?? (isV2 ? 0.45 : 0.35),
           version: isV2 ? 'V2 (trained)' : 'V1 (heuristic)',
-          dfdc:    isV2 ? '93.20%' : 'N/A'
+          dfdc:    isV2 ? '93.20%' : 'N/A',
         },
         ...(isV2 ? {} : {
-          frequency: {
-            score:   data.model_scores?.frequency  ?? 0.5,
-            weight:  data.ensemble_weights?.frequency  ?? 0.20,
-            version: 'V1 (heuristic)',
-            dfdc:    'N/A'
-          },
-          biological: {
-            score:   data.model_scores?.biological ?? 0.5,
-            weight:  data.ensemble_weights?.biological ?? 0.15,
-            version: 'V1 (heuristic)',
-            dfdc:    'N/A'
-          }
+          frequency:  { score: data.model_scores?.frequency  ?? 0.5, weight: 0.20, version: 'V1', dfdc: 'N/A' },
+          biological: { score: data.model_scores?.biological ?? 0.5, weight: 0.15, version: 'V1', dfdc: 'N/A' }
         })
       },
-
-      // Ensemble info
       ensembleInfo: data.ensemble_info ?? null,
-
-      // Grad-CAM (V2 only)
-      gradcam: data.gradcam ?? null,
-
-      // Raw backend data for debugging
-      raw: data
+      gradcam:      data.gradcam ?? null,
+      raw:          data
     };
   };
 
-  // ── UI helpers ──────────────────────────────────────────────────────────────
-  const getVerdictColor = (isFake, conf) => {
-    if (isFake)  return conf > 0.8 ? 'text-red-500'    : 'text-orange-400';
-    return conf  > 0.8 ? 'text-green-400'   : 'text-emerald-300';
-  };
-
-  const getConfBg = (isFake, conf) => {
-    if (isFake)  return conf > 0.8 ? 'bg-red-900/40 border-red-500/50'    : 'bg-orange-900/40 border-orange-500/50';
-    return conf  > 0.8 ? 'bg-green-900/40 border-green-500/50' : 'bg-emerald-900/40 border-emerald-500/50';
-  };
-
-  const getBarColor = (score) =>
+  const getFakeBarColor = (score) =>
     score > 0.7 ? 'from-red-500 to-red-600'
     : score > 0.4 ? 'from-yellow-500 to-orange-500'
     : 'from-green-500 to-emerald-500';
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 text-white">
+  const getScoreInterpretation = (score) => {
+    if (score < 0.1) return 'Very confident — no manipulation detected';
+    if (score < 0.3) return 'Low fake probability — likely authentic';
+    if (score < 0.6) return 'Moderate signals — some artifacts present';
+    return 'Strong manipulation indicators detected';
+  };
 
-      {/* ── Header ── */}
-      <div className="bg-black/30 backdrop-blur-sm border-b border-white/10">
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white">
+
+      {/* Header */}
+      <div className="bg-black/40 backdrop-blur-sm border-b border-white/10">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">DeepTrust</h1>
-            <p className="text-sm text-blue-200">Explainable AI Deepfake Detection</p>
+            <h1 className="text-2xl font-bold tracking-tight">DeepTrust</h1>
+            <p className="text-xs text-blue-300 mt-0.5">Explainable AI Deepfake Detection System</p>
           </div>
-          <div className="flex items-center gap-4 text-sm">
-            <span className={token ? 'text-green-400' : 'text-yellow-400'}>
-              {token ? '✓ Authenticated' : '⚠ No Auth'}
-            </span>
-          </div>
+          <span className={`text-xs ${token ? 'text-green-400' : 'text-gray-500'}`}>
+            {token ? '● Authenticated' : '● No Auth'}
+          </span>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
 
-        {/* ── Model Selector ── */}
-        <div className="mb-8 flex justify-center">
+        {/* Model Selector */}
+        <div className="mb-6 flex justify-center">
           <div className="bg-black/30 rounded-2xl p-1 border border-white/10 flex gap-1">
-            <button
-              onClick={() => { setModelVersion('v2'); setResults(null); }}
-              className={`px-6 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 ${
-                modelVersion === 'v2'
-                  ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white shadow-lg'
-                  : 'text-gray-400 hover:text-white hover:bg-white/5'
-              }`}
-            >
+            <button onClick={() => { setModelVersion('v2'); setResults(null); }}
+              className={`px-6 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 text-sm ${
+                modelVersion === 'v2' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'
+              }`}>
               <Brain className="w-4 h-4" />
               DeepTrust V2
-              <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">95.52% DFDC</span>
+              <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full font-normal">95.52% DFDC</span>
             </button>
-            <button
-              onClick={() => { setModelVersion('v1'); setResults(null); }}
-              className={`px-6 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 ${
-                modelVersion === 'v1'
-                  ? 'bg-white/10 text-white border border-white/20'
-                  : 'text-gray-400 hover:text-white hover:bg-white/5'
-              }`}
-            >
+            <button onClick={() => { setModelVersion('v1'); setResults(null); }}
+              className={`px-6 py-3 rounded-xl font-semibold transition-all flex items-center gap-2 text-sm ${
+                modelVersion === 'v1' ? 'bg-white/10 text-white border border-white/20' : 'text-gray-400 hover:text-white hover:bg-white/5'
+              }`}>
               <FlaskConical className="w-4 h-4" />
               Classic Models
-              <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full">Baseline</span>
+              <span className="text-xs bg-white/10 px-2 py-0.5 rounded-full font-normal">Baseline</span>
             </button>
           </div>
         </div>
 
-        {/* Model version info banner */}
-        <div className={`mb-6 p-4 rounded-xl border text-sm ${
-          modelVersion === 'v2'
-            ? 'bg-blue-900/30 border-blue-500/30 text-blue-200'
-            : 'bg-gray-800/50 border-gray-600/30 text-gray-300'
+        {/* Info Banner */}
+        <div className={`mb-6 p-3 rounded-xl border text-xs ${
+          modelVersion === 'v2' ? 'bg-blue-900/20 border-blue-500/20 text-blue-300' : 'bg-gray-800/40 border-gray-600/20 text-gray-400'
         }`}>
-          {modelVersion === 'v2' ? (
-            <p>
-              <span className="font-semibold text-blue-300">DeepTrust V2</span> — 
-              MesoNet + XceptionNet trained on FaceForensics++ (210,952 frames), 
-              cross-validated on DFDC (39,428 unseen frames). 
-              Platt-calibrated confidence. Grad-CAM XAI included.
-            </p>
-          ) : (
-            <p>
-              <span className="font-semibold text-gray-200">Classic Models (Baseline)</span> — 
-              Lightweight heuristic analysis using texture variance, HOG features, 
-              FFT/DCT coefficients, and facial symmetry. 
-              Kept for academic comparison — no deep learning training involved.
-            </p>
-          )}
+          {modelVersion === 'v2'
+            ? '🎯 DeepTrust V2 — MesoNet + XceptionNet trained on FaceForensics++ (210,952 frames), cross-validated on DFDC (39,428 unseen frames). Platt-calibrated confidence. Grad-CAM XAI included.'
+            : '🔬 Classic Models (Baseline) — Lightweight heuristic analysis for academic comparison. No deep learning training.'}
         </div>
 
-        {/* ── Upload Zone (shown when no file selected) ── */}
+        {/* Upload Zone */}
         {!file && (
           <div className="text-center mb-12">
-            <h2 className="text-4xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+            <h2 className="text-4xl font-bold mb-3 bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">
               Verify Media Authenticity
             </h2>
-            <p className="text-blue-200 mb-8 text-lg">
-              Upload an image or video for AI-powered deepfake detection
-            </p>
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="max-w-2xl mx-auto border-2 border-dashed border-blue-400/50 rounded-2xl p-16 hover:border-blue-400 hover:bg-white/5 transition-all cursor-pointer"
-            >
-              <Upload className="w-16 h-16 mx-auto mb-4 text-blue-400" />
-              <p className="text-xl mb-2">Click to upload media</p>
-              <p className="text-sm text-blue-300">Supports JPG, PNG, MP4, AVI</p>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*,video/*"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
+            <p className="text-blue-200 mb-8">Upload an image or video for AI-powered deepfake detection with XAI explanations</p>
+            <div onClick={() => fileInputRef.current?.click()}
+              className="max-w-2xl mx-auto border-2 border-dashed border-blue-500/40 rounded-2xl p-16 hover:border-blue-400 hover:bg-white/3 transition-all cursor-pointer group">
+              <Upload className="w-14 h-14 mx-auto mb-4 text-blue-400 group-hover:scale-110 transition-transform" />
+              <p className="text-lg mb-1 font-medium">Click to upload media</p>
+              <p className="text-sm text-blue-300/70">Supports JPG, PNG, MP4, AVI — pre-cropped face image recommended</p>
+              <input ref={fileInputRef} type="file" accept="image/*,video/*" onChange={handleFileSelect} className="hidden" />
             </div>
-
-            <div className="grid md:grid-cols-4 gap-6 mt-12">
+            <div className="grid md:grid-cols-4 gap-4 mt-10">
               {[
-                { icon: Brain,    title: 'Trained CNNs',       desc: 'MesoNet V2 + XceptionNet V2' },
-                { icon: BarChart3, title: 'Cross-validated',   desc: 'DFDC 39,428 unseen frames' },
-                { icon: Eye,      title: 'Grad-CAM XAI',       desc: 'Visualize altered regions' },
-                { icon: Layers,   title: 'Platt Calibration',  desc: '81,620 image calibration' }
+                { icon: Brain,     title: 'Trained CNNs',     desc: 'MesoNet V2 + XceptionNet V2' },
+                { icon: BarChart3, title: 'Cross-validated',  desc: 'DFDC 39,428 unseen frames' },
+                { icon: Eye,       title: 'Grad-CAM XAI',     desc: 'Visualize decision regions' },
+                { icon: Layers,    title: 'Platt Calibrated', desc: '81,620 image calibration' }
               ].map((f, i) => (
-                <div key={i} className="bg-white/5 rounded-xl p-6 border border-white/10">
-                  <f.icon className="w-8 h-8 text-blue-400 mb-3 mx-auto" />
-                  <h3 className="font-semibold mb-2">{f.title}</h3>
-                  <p className="text-sm text-blue-300">{f.desc}</p>
+                <div key={i} className="bg-white/4 rounded-xl p-5 border border-white/8 text-center">
+                  <f.icon className="w-7 h-7 text-blue-400 mb-2 mx-auto" />
+                  <h3 className="font-semibold text-sm mb-1">{f.title}</h3>
+                  <p className="text-xs text-blue-300/70">{f.desc}</p>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* ── Analysis Interface ── */}
+        {/* Analysis Interface */}
         {file && (
-          <div className="grid lg:grid-cols-2 gap-8">
+          <div className="grid lg:grid-cols-2 gap-6">
 
-            {/* Preview + Grad-CAM Panel */}
-            <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-6 border border-white/10">
+            {/* Left — Preview */}
+            <div className="bg-white/4 backdrop-blur-sm rounded-2xl p-5 border border-white/10">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xl font-semibold">Media Preview</h3>
+                <h3 className="font-semibold text-sm">Media Preview</h3>
                 {results?.gradcam && (
-                  <div className="flex gap-1 bg-black/30 rounded-lg p-1">
-                    <button
-                      onClick={() => setGradcamView('original')}
-                      className={`px-3 py-1 text-xs rounded transition-all ${
-                        gradcamView === 'original' ? 'bg-blue-500 text-white' : 'text-gray-400'
-                      }`}
-                    >Original</button>
-                    <button
-                      onClick={() => setGradcamView('mesonet')}
-                      className={`px-3 py-1 text-xs rounded transition-all ${
-                        gradcamView === 'mesonet' ? 'bg-blue-500 text-white' : 'text-gray-400'
-                      }`}
-                    >MesoNet</button>
-                    <button
-                      onClick={() => setGradcamView('xceptionnet')}
-                      className={`px-3 py-1 text-xs rounded transition-all ${
-                        gradcamView === 'xceptionnet' ? 'bg-blue-500 text-white' : 'text-gray-400'
-                      }`}
-                    >XceptionNet</button>
+                  <div className="flex gap-1 bg-black/30 rounded-lg p-1 text-xs">
+                    {['original', 'mesonet', 'xceptionnet'].map(v => (
+                      <button key={v} onClick={() => setGradcamView(v)}
+                        className={`px-2.5 py-1 rounded capitalize transition-all ${
+                          gradcamView === v ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                        }`}>
+                        {v === 'xceptionnet' ? 'Xcept' : v === 'mesonet' ? 'Meso' : 'Original'}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
 
               {preview && (
-                <div className="relative">
-                  {/* Original preview */}
+                <div className="relative rounded-xl overflow-hidden">
                   {(!results?.gradcam || gradcamView === 'original') && (
                     <img src={preview} alt="Preview" className="w-full rounded-xl" />
                   )}
-                  {/* Grad-CAM overlays */}
                   {results?.gradcam && gradcamView === 'mesonet' && (
-                    <div>
-                      <img
-                        src={`data:image/jpeg;base64,${results.gradcam.mesonet.image_base64}`}
-                        alt="MesoNet Grad-CAM"
-                        className="w-full rounded-xl"
-                      />
-                      <p className="text-xs text-center text-gray-400 mt-2">
-                        {results.gradcam.mesonet.description}
-                      </p>
-                    </div>
+                    <img src={`data:image/jpeg;base64,${results.gradcam.mesonet.image_base64}`} alt="MesoNet Grad-CAM" className="w-full rounded-xl" />
                   )}
                   {results?.gradcam && gradcamView === 'xceptionnet' && (
-                    <div>
-                      <img
-                        src={`data:image/jpeg;base64,${results.gradcam.xceptionnet.image_base64}`}
-                        alt="XceptionNet Grad-CAM"
-                        className="w-full rounded-xl"
-                      />
-                      <p className="text-xs text-center text-gray-400 mt-2">
-                        {results.gradcam.xceptionnet.description}
-                      </p>
+                    <img src={`data:image/jpeg;base64,${results.gradcam.xceptionnet.image_base64}`} alt="XceptionNet Grad-CAM" className="w-full rounded-xl" />
+                  )}
+                  {results && !results.noFace && (
+                    <div className={`absolute top-3 right-3 px-3 py-1.5 rounded-lg text-xs font-bold border backdrop-blur-sm ${
+                      results.isDeepfake ? 'bg-red-900/80 border-red-500/60 text-red-300' : 'bg-green-900/80 border-green-500/60 text-green-300'
+                    }`}>
+                      {results.isDeepfake ? '⚠ FAKE' : '✓ REAL'}
                     </div>
                   )}
-                  {/* Grad-CAM legend */}
-                  {results?.gradcam && gradcamView !== 'original' && (
-                    <div className="flex items-center gap-2 mt-2 text-xs text-gray-400">
-                      <div className="flex gap-1">
-                        <div className="w-3 h-3 rounded-sm bg-blue-500"/>
-                        <span>Low</span>
-                      </div>
-                      <div className="flex gap-1">
-                        <div className="w-3 h-3 rounded-sm bg-yellow-400"/>
-                        <span>Medium</span>
-                      </div>
-                      <div className="flex gap-1">
-                        <div className="w-3 h-3 rounded-sm bg-red-500"/>
-                        <span>High — manipulation detected</span>
-                      </div>
+                  {results?.noFace && (
+                    <div className="absolute top-3 right-3 px-3 py-1.5 rounded-lg text-xs font-bold border backdrop-blur-sm bg-yellow-900/80 border-yellow-500/60 text-yellow-300">
+                      ⚠ NO FACE
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Action buttons */}
+              {/* Grad-CAM context note */}
+              {results?.gradcam && gradcamView !== 'original' && (
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center gap-3 text-xs text-gray-500">
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-blue-500 opacity-60"/><span>Low</span></div>
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-yellow-400 opacity-60"/><span>Medium</span></div>
+                    <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-red-500 opacity-60"/><span>High attention</span></div>
+                  </div>
+                  <p className="text-xs text-gray-600 leading-relaxed">
+                    {results.isDeepfake
+                      ? '🔴 Red/yellow areas indicate where the model found manipulation artifacts — face boundaries, texture inconsistencies, or lighting anomalies.'
+                      : '🔵 For authentic images, warm colors show where the model paid close attention and found NO manipulation. High attention ≠ manipulation detected.'}
+                  </p>
+                </div>
+              )}
+
               <div className="flex gap-3 mt-4">
-                <button
-                  onClick={analyzeMedia}
-                  disabled={analyzing}
-                  className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 rounded-xl font-semibold transition-all"
-                >
-                  {analyzing
-                    ? `Running ${modelVersion === 'v2' ? 'DeepTrust V2' : 'Classic'} Analysis...`
-                    : 'Analyze Media'}
+                <button onClick={analyzeMedia} disabled={analyzing}
+                  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 px-6 py-3 rounded-xl font-semibold text-sm transition-all">
+                  {analyzing ? 'Analyzing...' : 'Analyze Media'}
                 </button>
-                <button
-                  onClick={() => { setFile(null); setPreview(null); setResults(null); setError(null); }}
-                  className="px-6 py-3 bg-white/10 hover:bg-white/20 rounded-xl transition-all"
-                >Clear</button>
+                <button onClick={() => { setFile(null); setPreview(null); setResults(null); setError(null); }}
+                  className="px-5 py-3 bg-white/8 hover:bg-white/15 rounded-xl text-sm transition-all">
+                  Clear
+                </button>
               </div>
-
-              {error && (
-                <div className="mt-3 p-3 bg-red-900/40 border border-red-500/40 rounded-xl text-sm text-red-300">
-                  {error}
-                </div>
-              )}
+              {error && <div className="mt-3 p-3 bg-red-900/30 border border-red-500/30 rounded-xl text-xs text-red-300">{error}</div>}
             </div>
 
-            {/* Results Panel */}
-            <div className="bg-white/5 backdrop-blur-sm rounded-2xl p-6 border border-white/10">
-              <h3 className="text-xl font-semibold mb-4">Analysis Results</h3>
+            {/* Right — Results */}
+            <div className="bg-white/4 backdrop-blur-sm rounded-2xl p-5 border border-white/10">
+              <h3 className="font-semibold mb-4 text-sm">Analysis Results</h3>
 
               {!results && !analyzing && (
-                <div className="text-center py-12 text-blue-300">
-                  Click "Analyze Media" to begin detection
-                </div>
+                <div className="text-center py-16 text-gray-500 text-sm">Click "Analyze Media" to begin</div>
               )}
 
               {analyzing && (
-                <div className="text-center py-12">
-                  <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-400 mx-auto mb-4"/>
-                  <p className="text-blue-300">
-                    {modelVersion === 'v2'
-                      ? 'Running DeepTrust V2 ensemble...'
-                      : 'Running classic model analysis...'}
-                  </p>
-                  <p className="text-sm text-blue-400 mt-2">
-                    {modelVersion === 'v2'
-                      ? 'MesoNet V2 + XceptionNet V2 + Grad-CAM + Platt calibration'
-                      : 'Texture + HOG + FFT + Biological analysis'}
-                  </p>
+                <div className="text-center py-16">
+                  <div className="animate-spin rounded-full h-14 w-14 border-b-2 border-blue-500 mx-auto mb-4"/>
+                  <p className="text-blue-300 text-sm">Running ensemble analysis...</p>
+                  <p className="text-xs text-gray-500 mt-1">MesoNet V2 + XceptionNet V2 + Grad-CAM</p>
                 </div>
               )}
 
               {results && (
-                <div className="space-y-5">
+                <div className="space-y-4">
 
-                  {/* Verdict Card */}
-                  <div className={`p-5 rounded-xl border-2 ${getConfBg(results.isDeepfake, results.confidence)}`}>
-                    <div className="flex items-center gap-3 mb-2">
-                      {results.isDeepfake
-                        ? <XCircle className="w-8 h-8 text-red-400"/>
-                        : <CheckCircle className="w-8 h-8 text-green-400"/>}
-                      <div>
-                        <h4 className={`text-2xl font-bold ${getVerdictColor(results.isDeepfake, results.confidence)}`}>
-                          {results.isDeepfake ? '⚠ DEEPFAKE DETECTED' : '✓ AUTHENTIC'}
-                        </h4>
-                        <p className="text-sm text-gray-300">
-                          Confidence: <span className="font-bold text-white">{results.confidencePct}</span>
-                          {results.calibrationActive && (
-                            <span className="ml-2 text-xs bg-blue-500/30 text-blue-300 px-2 py-0.5 rounded-full">
-                              Platt calibrated
-                            </span>
-                          )}
-                        </p>
+                  {/* Verdict */}
+                  {results.noFace ? (
+                    /* ── NO FACE card ── */
+                    <div className="p-4 rounded-xl border-2 bg-yellow-900/30 border-yellow-500/50">
+                      <div className="flex items-start gap-3">
+                        <AlertCircle className="w-7 h-7 text-yellow-400 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-lg font-bold text-yellow-400">⚠ NO FACE DETECTED</h4>
+                          <p className="text-sm text-gray-300 mt-0.5">{results.explanation}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            DeepTrust analyzes human faces only. Please upload a photo containing a clearly visible human face.
+                          </p>
+                        </div>
                       </div>
                     </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      Using: <span className="text-white font-medium">
-                        {results.modelVersion === 'v2' ? 'DeepTrust V2 (Trained Ensemble)' : 'Classic Models (Baseline)'}
-                      </span>
+                  ) : (
+                    /* ── FAKE / REAL card ── */
+                    <div className={`p-4 rounded-xl border-2 ${
+                      results.isDeepfake ? 'bg-red-900/30 border-red-500/50' : 'bg-green-900/30 border-green-500/50'
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        {results.isDeepfake
+                          ? <ShieldAlert className="w-7 h-7 text-red-400 flex-shrink-0"/>
+                          : <ShieldCheck className="w-7 h-7 text-green-400 flex-shrink-0"/>}
+                        <div>
+                          <h4 className={`text-lg font-bold ${results.isDeepfake ? 'text-red-400' : 'text-green-400'}`}>
+                            {results.isDeepfake ? '⚠ DEEPFAKE DETECTED' : '✓ AUTHENTIC IMAGE'}
+                          </h4>
+                          <p className="text-sm text-gray-300 mt-0.5">
+                            Confidence: <span className="font-bold text-white">{results.confidencePct}</span>
+                            {results.calibrationActive && (
+                              <span className="ml-2 text-xs bg-blue-500/25 text-blue-300 px-2 py-0.5 rounded-full">Platt calibrated</span>
+                            )}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {results.modelVersion === 'v2' ? 'DeepTrust V2 (Trained Ensemble)' : 'Classic Models (Baseline)'}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
-                  {/* Tabs */}
-                  <div className="flex gap-2 border-b border-white/20">
-                    {['overview', 'models', 'xai'].map(tab => (
-                      <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className={`px-4 py-2 font-medium capitalize transition-colors ${
-                          activeTab === tab
-                            ? 'text-blue-400 border-b-2 border-blue-400'
-                            : 'text-gray-400 hover:text-white'
-                        }`}
-                      >{tab}</button>
-                    ))}
-                  </div>
+                  {/* Tabs — hide for NO_FACE since there's no data to show */}
+                  {!results.noFace && (
+                    <>
+                      <div className="flex gap-1 border-b border-white/10">
+                        {['overview', 'models', 'xai'].map(tab => (
+                          <button key={tab} onClick={() => setActiveTab(tab)}
+                            className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
+                              activeTab === tab ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-500 hover:text-gray-300'
+                            }`}>{tab}</button>
+                        ))}
+                      </div>
 
-                  {/* Overview Tab */}
-                  {activeTab === 'overview' && (
-                    <div className="space-y-4">
-                      <div className="bg-white/5 rounded-xl p-4">
-                        <h5 className="font-semibold mb-3">Model Score Breakdown</h5>
+                      {/* OVERVIEW */}
+                      {activeTab === 'overview' && (
                         <div className="space-y-3">
+                          <div className="bg-black/20 rounded-xl p-4">
+                            <div className="flex items-center gap-2 mb-4">
+                              <h5 className="text-sm font-semibold text-gray-200">Model Fake-Probability Scores</h5>
+                              <div className="group relative">
+                                <Info className="w-3.5 h-3.5 text-gray-500 cursor-help"/>
+                                <div className="hidden group-hover:block absolute left-0 top-5 z-10 bg-gray-800 border border-white/10 rounded-lg p-2 text-xs text-gray-300 w-56">
+                                  Each score shows P(fake) — how likely the model thinks this image is a deepfake. 0% = definitely real, 100% = definitely fake. Threshold is 30%.
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-5">
+                              {/* MesoNet score */}
+                              <div>
+                                <div className="flex justify-between items-end mb-1.5">
+                                  <div>
+                                    <span className="text-sm font-medium">MesoNet</span>
+                                    <span className="text-xs text-gray-500 ml-2">weight {(results.models.mesonet.weight * 100).toFixed(0)}%</span>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className={`text-sm font-bold ${results.mesoFakeScore >= 0.3 ? 'text-red-400' : 'text-green-400'}`}>
+                                      {results.mesoFakePct}% fake
+                                    </span>
+                                    <span className="text-xs text-gray-500 ml-1">({results.mesoRealPct}% real)</span>
+                                  </div>
+                                </div>
+                                <div className="h-2.5 bg-white/8 rounded-full overflow-hidden">
+                                  <div className={`h-full bg-gradient-to-r ${getFakeBarColor(results.mesoFakeScore)} transition-all duration-700`}
+                                    style={{ width: `${results.mesoFakeScore * 100}%` }}/>
+                                </div>
+                                <p className="text-xs text-gray-600 mt-1">{getScoreInterpretation(results.mesoFakeScore)}</p>
+                              </div>
+
+                              {/* XceptionNet score */}
+                              <div>
+                                <div className="flex justify-between items-end mb-1.5">
+                                  <div>
+                                    <span className="text-sm font-medium">XceptionNet</span>
+                                    <span className="text-xs text-gray-500 ml-2">weight {(results.models.xception.weight * 100).toFixed(0)}%</span>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className={`text-sm font-bold ${results.xceptFakeScore >= 0.3 ? 'text-red-400' : 'text-green-400'}`}>
+                                      {results.xceptFakePct}% fake
+                                    </span>
+                                    <span className="text-xs text-gray-500 ml-1">({results.xceptRealPct}% real)</span>
+                                  </div>
+                                </div>
+                                <div className="h-2.5 bg-white/8 rounded-full overflow-hidden">
+                                  <div className={`h-full bg-gradient-to-r ${getFakeBarColor(results.xceptFakeScore)} transition-all duration-700`}
+                                    style={{ width: `${results.xceptFakeScore * 100}%` }}/>
+                                </div>
+                                <p className="text-xs text-gray-600 mt-1">{getScoreInterpretation(results.xceptFakeScore)}</p>
+                              </div>
+
+                              {/* Ensemble */}
+                              <div className="pt-3 border-t border-white/8">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-sm font-semibold text-gray-200">Ensemble Score</span>
+                                  <span className={`text-sm font-bold ${(results.ensembleScore ?? 0) >= 0.3 ? 'text-red-400' : 'text-green-400'}`}>
+                                    {((results.ensembleScore ?? 0) * 100).toFixed(1)}% fake probability
+                                  </span>
+                                </div>
+                                <p className="text-xs text-gray-600 mt-1">
+                                  Weighted: {(results.models.mesonet.weight * 100).toFixed(0)}% MesoNet + {(results.models.xception.weight * 100).toFixed(0)}% XceptionNet · Decision threshold: 30%
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {results.modelVersion === 'v2' && (
+                            <div className="bg-blue-900/15 border border-blue-500/20 rounded-xl p-3 text-xs">
+                              <p className="text-blue-300 font-medium mb-1.5">DeepTrust V2 — Validated Performance</p>
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-blue-200/70">
+                                <span>DFDC Accuracy: <span className="text-white font-medium">95.52%</span></span>
+                                <span>AUC-ROC: <span className="text-white font-medium">0.9927</span></span>
+                                <span>Recall (fakes): <span className="text-white font-medium">95.48%</span></span>
+                                <span>Specificity: <span className="text-white font-medium">95.56%</span></span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* MODELS */}
+                      {activeTab === 'models' && (
+                        <div className="space-y-3">
+                          <div className="bg-amber-900/10 border border-amber-500/20 rounded-lg p-3 flex gap-2 text-xs text-amber-300/80">
+                            <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5"/>
+                            <span>Scores show P(fake) — probability of being a deepfake. Near 0% = confident real, near 100% = confident fake. Decision threshold is 30%.</span>
+                          </div>
                           {Object.entries(results.models).map(([name, data]) => (
-                            <div key={name}>
-                              <div className="flex justify-between text-sm mb-1">
-                                <span className="capitalize flex items-center gap-2">
-                                  {name}
-                                  <span className="text-xs text-gray-500">({data.version})</span>
-                                </span>
-                                <span className="font-medium">
-                                  {(data.score * 100).toFixed(1)}%
-                                  <span className="text-gray-500 ml-1">× {data.weight}</span>
-                                </span>
+                            <div key={name} className="bg-black/20 rounded-xl p-4">
+                              <div className="flex justify-between items-start mb-2">
+                                <div>
+                                  <h5 className="font-semibold text-sm">
+                                    {name === 'xception' ? 'XceptionNet' : name.charAt(0).toUpperCase() + name.slice(1)}
+                                  </h5>
+                                  <p className="text-xs text-gray-500">{data.version} · Weight: {(data.weight * 100).toFixed(0)}%</p>
+                                  {data.dfdc !== 'N/A' && <p className="text-xs text-blue-400">DFDC: {data.dfdc}</p>}
+                                </div>
+                                <div className="text-right">
+                                  <p className={`text-base font-bold ${data.score >= 0.3 ? 'text-red-400' : 'text-green-400'}`}>
+                                    {(data.score * 100).toFixed(1)}%
+                                  </p>
+                                  <p className="text-xs text-gray-500">fake probability</p>
+                                  <span className={`text-xs font-bold px-2 py-0.5 rounded mt-0.5 inline-block ${
+                                    data.score >= 0.3 ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
+                                  }`}>{data.score >= 0.3 ? 'FAKE' : 'REAL'}</span>
+                                </div>
                               </div>
-                              <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full bg-gradient-to-r ${getBarColor(data.score)} transition-all duration-700`}
-                                  style={{ width: `${data.score * 100}%` }}
-                                />
+                              <div className="h-2 bg-white/8 rounded-full overflow-hidden">
+                                <div className={`h-full bg-gradient-to-r ${getFakeBarColor(data.score)}`}
+                                  style={{ width: `${data.score * 100}%` }}/>
                               </div>
+                              <p className="text-xs text-gray-600 mt-1">{getScoreInterpretation(data.score)}</p>
                             </div>
                           ))}
                         </div>
-                      </div>
-
-                      {/* V2 performance info */}
-                      {results.modelVersion === 'v2' && results.ensembleInfo && (
-                        <div className="bg-blue-900/30 border border-blue-500/30 rounded-xl p-4 text-sm">
-                          <h5 className="font-semibold text-blue-300 mb-2">
-                            DeepTrust V2 — Validated Performance
-                          </h5>
-                          <div className="grid grid-cols-2 gap-2 text-xs text-blue-200">
-                            <div>Accuracy: <span className="text-white font-medium">{results.ensembleInfo.accuracy}</span></div>
-                            <div>Recall: <span className="text-white font-medium">{results.ensembleInfo.recall}</span></div>
-                            <div>Specificity: <span className="text-white font-medium">{results.ensembleInfo.specificity}</span></div>
-                            <div>AUC-ROC: <span className="text-white font-medium">{results.ensembleInfo.auc_roc}</span></div>
-                          </div>
-                          <p className="text-xs text-blue-300 mt-2">
-                            Cross-validated on DFDC — never seen during training
-                          </p>
-                        </div>
                       )}
 
-                      {/* V1 baseline note */}
-                      {results.modelVersion === 'v1' && (
-                        <div className="bg-gray-800/50 border border-gray-600/30 rounded-xl p-4 text-sm text-gray-300">
-                          <h5 className="font-semibold text-gray-200 mb-1">Classic Models — Academic Baseline</h5>
-                          <p className="text-xs">
-                            Results from heuristic analysis without deep learning training.
-                            Compare with DeepTrust V2 to see the improvement from trained models.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                      {/* XAI */}
+                      {activeTab === 'xai' && (
+                        <div className="space-y-4">
+                          {results.explanation && (
+                            <div className="bg-black/20 rounded-xl p-4">
+                              <h5 className="font-semibold mb-2 flex items-center gap-2 text-sm">
+                                <Eye className="w-4 h-4 text-blue-400"/>
+                                XAI Explanation
+                              </h5>
+                              <p className="text-sm text-gray-300 leading-relaxed">{results.explanation}</p>
+                            </div>
+                          )}
 
-                  {/* Models Tab */}
-                  {activeTab === 'models' && (
-                    <div className="space-y-3">
-                      {Object.entries(results.models).map(([name, data]) => (
-                        <div key={name} className="bg-white/5 rounded-xl p-4">
-                          <div className="flex justify-between items-center mb-1">
-                            <h5 className="font-semibold capitalize">{name}</h5>
-                            <span className={`text-sm font-bold ${
-                              data.score > 0.5 ? 'text-red-400' : 'text-green-400'
-                            }`}>
-                              {(data.score * 100).toFixed(1)}%
-                              <span className="text-xs text-gray-400 ml-1 font-normal">
-                                {data.score > 0.5 ? 'FAKE' : 'REAL'}
+                          {/* Important note for real images */}
+                          {!results.isDeepfake && results.gradcam && (
+                            <div className="bg-blue-900/15 border border-blue-500/20 rounded-lg p-3 flex gap-2 text-xs text-blue-300/80">
+                              <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5"/>
+                              <span>
+                                <strong className="text-blue-300">About Grad-CAM on authentic images:</strong> Warm colors (red/yellow) show regions the model examined closely — not regions where manipulation was found. The model inspected these areas and confirmed they are authentic. This is expected Grad-CAM behavior.
                               </span>
-                            </span>
-                          </div>
-                          <div className="flex gap-3 text-xs text-gray-400">
-                            <span>Version: <span className="text-gray-200">{data.version}</span></span>
-                            <span>Weight: <span className="text-gray-200">{(data.weight * 100).toFixed(0)}%</span></span>
-                            {data.dfdc !== 'N/A' && (
-                              <span>DFDC acc: <span className="text-blue-300">{data.dfdc}</span></span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                            </div>
+                          )}
 
-                  {/* XAI Tab */}
-                  {activeTab === 'xai' && (
-                    <div className="space-y-4">
-                      {results.explanation && (
-                        <div className="bg-white/5 rounded-xl p-4">
-                          <h5 className="font-semibold mb-2 flex items-center gap-2">
-                            <Eye className="w-4 h-4 text-blue-400"/>
-                            Explanation
-                          </h5>
-                          <p className="text-sm text-gray-300 leading-relaxed">
-                            {results.explanation}
-                          </p>
+                          {results.gradcam ? (
+                            <div className="bg-black/20 rounded-xl p-4">
+                              <h5 className="font-semibold mb-1 text-sm">Grad-CAM Activation Maps</h5>
+                              <p className="text-xs text-gray-500 mb-3">
+                                Gradient-weighted Class Activation Mapping — visualizes which regions influenced the model's decision.
+                              </p>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="text-center">
+                                  <img src={`data:image/jpeg;base64,${results.gradcam.mesonet.image_base64}`}
+                                    alt="MesoNet Grad-CAM" className="w-full rounded-lg border border-white/10"/>
+                                  <div className="mt-1.5">
+                                    <p className="text-xs font-medium text-gray-300">MesoNet V2</p>
+                                    <p className="text-xs text-gray-600">Low-level texture artifacts</p>
+                                    <p className={`text-xs font-bold mt-0.5 ${results.mesoFakeScore >= 0.3 ? 'text-red-400' : 'text-green-400'}`}>
+                                      {results.mesoFakePct}% fake
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="text-center">
+                                  <img src={`data:image/jpeg;base64,${results.gradcam.xceptionnet.image_base64}`}
+                                    alt="XceptionNet Grad-CAM" className="w-full rounded-lg border border-white/10"/>
+                                  <div className="mt-1.5">
+                                    <p className="text-xs font-medium text-gray-300">XceptionNet V2</p>
+                                    <p className="text-xs text-gray-600">High-level spatial patterns</p>
+                                    <p className={`text-xs font-bold mt-0.5 ${results.xceptFakeScore >= 0.3 ? 'text-red-400' : 'text-green-400'}`}>
+                                      {results.xceptFakePct}% fake
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-center gap-4 mt-3 text-xs text-gray-600">
+                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-blue-500 opacity-60"/><span>Low attention</span></div>
+                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-yellow-400 opacity-60"/><span>Medium</span></div>
+                                <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-red-500 opacity-60"/><span>High attention</span></div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="bg-black/20 rounded-xl p-6 text-center text-gray-500 text-sm">
+                              {results.modelVersion === 'v1' ? 'Grad-CAM XAI is only available with DeepTrust V2.' : 'Grad-CAM not available.'}
+                            </div>
+                          )}
                         </div>
                       )}
-
-                      {results.gradcam ? (
-                        <div className="bg-white/5 rounded-xl p-4">
-                          <h5 className="font-semibold mb-3">Grad-CAM Heatmaps</h5>
-                          <p className="text-xs text-gray-400 mb-3">
-                            {results.gradcam.note}
-                          </p>
-                          <p className="text-xs text-gray-400">
-                            Use the heatmap toggle above the image to switch between
-                            MesoNet and XceptionNet activation maps.
-                            Red/yellow regions show where each model detected manipulation.
-                          </p>
-                          <div className="grid grid-cols-2 gap-2 mt-3">
-                            <div className="text-center">
-                              <img
-                                src={`data:image/jpeg;base64,${results.gradcam.mesonet.image_base64}`}
-                                alt="MesoNet heatmap"
-                                className="w-full rounded-lg"
-                              />
-                              <p className="text-xs text-gray-400 mt-1">MesoNet</p>
-                            </div>
-                            <div className="text-center">
-                              <img
-                                src={`data:image/jpeg;base64,${results.gradcam.xceptionnet.image_base64}`}
-                                alt="XceptionNet heatmap"
-                                className="w-full rounded-lg"
-                              />
-                              <p className="text-xs text-gray-400 mt-1">XceptionNet</p>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="bg-white/5 rounded-xl p-4 text-center text-gray-400 text-sm">
-                          {results.modelVersion === 'v1'
-                            ? 'Grad-CAM XAI is only available with DeepTrust V2. Switch to V2 to see heatmaps.'
-                            : 'Grad-CAM not available for this result.'}
-                        </div>
-                      )}
-                    </div>
+                    </>
                   )}
 
                 </div>

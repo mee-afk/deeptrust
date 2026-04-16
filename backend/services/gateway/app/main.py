@@ -24,10 +24,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── Service URLs (injected by docker-compose) ─────────────────────────────────
-AUTH_SERVICE_URL     = os.getenv("AUTH_SERVICE_URL",     "http://auth:8001")
-ANALYSIS_SERVICE_URL = os.getenv("ANALYSIS_SERVICE_URL", "http://analysis:8002")
-MODELS_SERVICE_URL   = os.getenv("MODELS_SERVICE_URL",   "http://models:8003")
-DEEPTRUST_V2_URL     = os.getenv("DEEPTRUST_V2_URL",     "http://deeptrust-v2:8080")
+# AUTH_SERVICE_URL     = os.getenv("AUTH_SERVICE_URL",     "http://auth:8001")
+# ANALYSIS_SERVICE_URL = os.getenv("ANALYSIS_SERVICE_URL", "http://analysis:8002")
+# MODELS_SERVICE_URL   = os.getenv("MODELS_SERVICE_URL",   "http://models:8003")
+# DEEPTRUST_V2_URL     = os.getenv("DEEPTRUST_V2_URL",     "http://deeptrust-v2:8090")
+
+AUTH_SERVICE_URL     = os.getenv("AUTH_SERVICE_URL",     "http://localhost:8001")
+ANALYSIS_SERVICE_URL = os.getenv("ANALYSIS_SERVICE_URL", "http://localhost:8002")
+MODELS_SERVICE_URL   = os.getenv("MODELS_SERVICE_URL",   "http://localhost:8003")
+DEEPTRUST_V2_URL     = os.getenv("DEEPTRUST_V2_URL",     "http://localhost:8090")
 
 TIMEOUT = httpx.Timeout(120.0)   # ML inference can take a few seconds
 

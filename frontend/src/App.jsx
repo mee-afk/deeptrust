@@ -87,6 +87,8 @@ const DeepTrustDetector = () => {
 
   const transformResponse = (data, version) => {
 
+    
+
     // NO_FACE — image has no human face detected
     if (data.error === 'no_face_detected' || data.verdict === 'NO_FACE') {
       return {
@@ -108,6 +110,39 @@ const DeepTrustDetector = () => {
         },
         gradcam:      null,
         ensembleInfo: null,
+        raw:          data
+      };
+    }
+
+    // ── Video response ──────────────────────────────────────────────────
+    if (data.frames_analyzed !== undefined) {
+      const isFake = data.verdict === 'FAKE';
+      const confidence = data.confidence ?? 0.5;
+      return {
+        isDeepfake:           isFake,
+        verdict:              isFake ? 'FAKE' : 'REAL',
+        confidence:           confidence,
+        confidencePct:        `${(confidence * 100).toFixed(2)}%`,
+        ensembleScore:        data.ensemble_score_mean ?? 0,
+        calibrationActive:    data.calibration_active ?? false,
+        modelVersion:         version,
+        explanation:          data.explanation ?? '',
+        isVideo:              true,
+        framesAnalyzed:       data.frames_analyzed,
+        ensembleMax:          data.ensemble_score_max,
+        singleFrameTriggered: data.single_frame_triggered,
+        mesoFakeScore:        data.mesonet?.mean_score ?? 0.5,
+        xceptFakeScore:       data.xceptionnet?.mean_score ?? 0.5,
+        mesoFakePct:          ((data.mesonet?.mean_score ?? 0.5) * 100).toFixed(1),
+        xceptFakePct:         ((data.xceptionnet?.mean_score ?? 0.5) * 100).toFixed(1),
+        mesoRealPct:          ((1 - (data.mesonet?.mean_score ?? 0.5)) * 100).toFixed(1),
+        xceptRealPct:         ((1 - (data.xceptionnet?.mean_score ?? 0.5)) * 100).toFixed(1),
+        models: {
+          mesonet:  { score: data.mesonet?.mean_score  ?? 0.5, weight: 0.55, version: 'V2 (trained)', dfdc: '93.41%' },
+          xception: { score: data.xceptionnet?.mean_score ?? 0.5, weight: 0.45, version: 'V2 (trained)', dfdc: '93.20%' }
+        },
+        gradcam:      null,
+        frameResults: data.frame_results ?? [],
         raw:          data
       };
     }
@@ -272,11 +307,12 @@ const DeepTrustDetector = () => {
                 )}
               </div>
 
-              {preview && (
+              {/* {preview && (
                 <div className="relative rounded-xl overflow-hidden">
                   {(!results?.gradcam || gradcamView === 'original') && (
                     <img src={preview} alt="Preview" className="w-full rounded-xl" />
                   )}
+                  
                   {results?.gradcam && gradcamView === 'mesonet' && (
                     <img src={`data:image/jpeg;base64,${results.gradcam.mesonet.image_base64}`} alt="MesoNet Grad-CAM" className="w-full rounded-xl" />
                   )}
@@ -295,6 +331,63 @@ const DeepTrustDetector = () => {
                       ⚠ NO FACE
                     </div>
                   )}
+                </div>
+              )} */}
+              {preview && (
+                <div className="relative rounded-xl overflow-hidden">
+
+                  {/*  IMAGE PREVIEW */}
+                  {file?.type.startsWith('image/') && (
+                    <>
+                      {(!results?.gradcam || gradcamView === 'original') && (
+                        <img src={preview} alt="Preview" className="w-full rounded-xl" />
+                      )}
+
+                      {results?.gradcam && gradcamView === 'mesonet' && (
+                        <img
+                          src={`data:image/jpeg;base64,${results.gradcam.mesonet.image_base64}`}
+                          alt="MesoNet Grad-CAM"
+                          className="w-full rounded-xl"
+                        />
+                      )}
+
+                      {results?.gradcam && gradcamView === 'xceptionnet' && (
+                        <img
+                          src={`data:image/jpeg;base64,${results.gradcam.xceptionnet.image_base64}`}
+                          alt="XceptionNet Grad-CAM"
+                          className="w-full rounded-xl"
+                        />
+                      )}
+                    </>
+                  )}
+
+                  {/*  VIDEO PREVIEW */}
+                  {file?.type.startsWith('video/') && (
+                    <video
+                      src={preview}
+                      controls
+                      className="w-full rounded-xl"
+                    />
+                  )}
+
+                  {/* Verdict badge */}
+                  {results && !results.noFace && (
+                    <div className={`absolute top-3 right-3 px-3 py-1.5 rounded-lg text-xs font-bold border backdrop-blur-sm ${
+                      results.isDeepfake
+                        ? 'bg-red-900/80 border-red-500/60 text-red-300'
+                        : 'bg-green-900/80 border-green-500/60 text-green-300'
+                    }`}>
+                      {results.isDeepfake ? '⚠ FAKE' : '✓ REAL'}
+                    </div>
+                  )}
+
+                  {/* NO FACE badge */}
+                  {results?.noFace && (
+                    <div className="absolute top-3 right-3 px-3 py-1.5 rounded-lg text-xs font-bold border backdrop-blur-sm bg-yellow-900/80 border-yellow-500/60 text-yellow-300">
+                      ⚠ NO FACE
+                    </div>
+                  )}
+
                 </div>
               )}
 

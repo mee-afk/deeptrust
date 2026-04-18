@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, UploadFile, Query, Request, HTTPException, He
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Optional
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -124,8 +125,20 @@ async def analyze(
             # ── Route to DeepTrust V2 trained ensemble ────────────────────────
             logger.info(f"[Gateway] → V2 ensemble: {file.filename}")
             try:
+                # r = await client.post(
+                #     f"{DEEPTRUST_V2_URL}/predict/image?gradcam={str(gradcam).lower()}",
+                #     files={"file": (file.filename, file_bytes, file.content_type)}
+                # )
+                suffix = Path(file.filename).suffix.lower()
+                is_video = suffix in {'.mp4', '.avi', '.mov', '.mkv', '.webm'}
+
+                if is_video:
+                    endpoint = f"{DEEPTRUST_V2_URL}/predict/video?n_frames=16&gradcam=false"
+                else:
+                    endpoint = f"{DEEPTRUST_V2_URL}/predict/image?gradcam={str(gradcam).lower()}"
+
                 r = await client.post(
-                    f"{DEEPTRUST_V2_URL}/predict/image?gradcam={str(gradcam).lower()}",
+                    endpoint,
                     files={"file": (file.filename, file_bytes, file.content_type)}
                 )
                 if r.status_code != 200:

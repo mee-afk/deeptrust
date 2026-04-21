@@ -1,33 +1,38 @@
 """
 Biological Signal Analyzer
-Detects deepfakes by analyzing biological signals like blink patterns.
-Real humans blink naturally; deepfakes often have unnatural blink patterns.
+==========================
+This module implements deepfake detection by analyzing physiological and biological 
+consistency. It focuses on features that are traditionally difficult for generative 
+adversarial networks (GANs) to replicate correctly, such as eye blinking patterns 
+and natural facial asymmetry.
 """
+
 import numpy as np
 import cv2
 from PIL import Image
 import logging
 
+# Configure logger for biological consistency diagnostics
 logger = logging.getLogger(__name__)
+
 
 class BiologicalAnalyzer:
     """
     Biological signal analysis for deepfake detection.
     
-    Features analyzed:
-    - Blink rate and timing
-    - Facial symmetry
-    - Micro-expressions
-    - Eye aspect ratio (EAR)
-    
-    Deepfakes typically fail to replicate:
-    - Natural blink patterns
-    - Perfect left-right facial symmetry
-    - Subtle muscle movements
+    This detector provides a sanity check on the human aspect of the face, analyzing:
+    - Facial Symmetry: Real faces are naturally asymmetric; high-degree mathematical 
+      symmetry can indicate synthetic rendering.
+    - Eye Texture & Consistency: Analyzes the variation and rendering of the iris 
+      and sclera to find uniform or 'painted-on' textures.
     """
     
     def __init__(self):
-        # Load face detector
+        """
+        Initializes the biological analyzer.
+        Loads pre-trained Haar cascades for facial and ocular feature detection.
+        """
+        # Load OpenCV's standard cascade classifiers
         self.face_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         )
@@ -38,21 +43,28 @@ class BiologicalAnalyzer:
     
     def detect_face_symmetry(self, image):
         """
-        Analyze facial symmetry.
-        Deepfakes often have unnatural perfect symmetry.
+        Analyzes bilateral facial symmetry.
         
+        Deepfakes, especially those based on average-face models, often exhibit 
+        unnatural perfection in symmetry. Real human faces show subtle differences 
+        between the left and right hemispheres.
+        
+        Args:
+            image: PIL Image or numpy array.
+            
         Returns:
             Symmetry score [0-1] - higher = more symmetric = more suspicious
         """
         if isinstance(image, Image.Image):
             image = np.array(image)
         
+        # Convert to grayscale for structural similarity analysis
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         else:
             gray = image
         
-        # Detect faces
+        # Isolate the face region for precise comparison
         faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
         
         if len(faces) == 0:
@@ -85,7 +97,7 @@ class BiologicalAnalyzer:
         """
         Analyze eye patterns.
         Deepfakes often have unnatural eye rendering.
-        
+            
         Returns:
             Anomaly score [0-1]
         """
@@ -103,34 +115,37 @@ class BiologicalAnalyzer:
         if len(eyes) < 2:
             return 0.5  # Need at least 2 eyes
         
-        # Analyze eye regions
         eye_scores = []
-        for (ex, ey, ew, eh) in eyes[:2]:  # Take first 2 eyes
+        for (ex, ey, ew, eh) in eyes[:2]:
             eye_region = gray[ey:ey+eh, ex:ex+ew]
             
-            # Calculate variance (deepfakes often have uniform eye texture)
+            # Analyze texture variance in the eye region.
+            # Real eyes have complex reflections and textures (high variance).
+            # Deepfakes often have 'smooth' or unnaturally uniform eyes (low variance).
             variance = np.var(eye_region)
             
-            # Low variance = suspicious
+            # Low variance translates to a higher suspiciousness score.
             eye_scores.append(1.0 / (1.0 + variance / 100.0))
         
         return float(np.mean(eye_scores))
     
-    def predict(self, image):
+    def predict(self, image) -> dict:
         """
-        Combined biological signal analysis.
+        Executes a holistic biological evaluation of the input image.
         
         Args:
-            image: PIL Image or numpy array
+            image: PIL Image or numpy array.
             
         Returns:
-            dict with 'score' (0-1) and 'is_fake' (bool)
+            dict: Aggregated biological markers and final verdict.
         """
         try:
+            # Measure symmetry and ocular markers
             symmetry_score = self.detect_face_symmetry(image)
             eye_score = self.detect_eye_patterns(image)
             
-            # Weighted combination
+            # Weighted aggregation: 
+            # 60% weight on facial symmetry markers, 40% on eye rendering artifacts.
             combined_score = (symmetry_score * 0.6 + eye_score * 0.4)
             
             return {
@@ -141,10 +156,10 @@ class BiologicalAnalyzer:
                 'eye_anomaly': float(eye_score)
             }
         except Exception as e:
-            logger.error(f"❌ Biological analysis failed: {e}")
+            logger.error(f"Critical execution failure in Biological Analyzer: {e}")
             return {
                 'score': 0.5,
                 'is_fake': False,
                 'confidence': 0.0,
-                'error': str(e)
+                'error': f"Biological analyzer engine failure: {str(e)}"
             }

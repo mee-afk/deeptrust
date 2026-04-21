@@ -1,7 +1,11 @@
 """
 DeepTrust Models Service
-Deepfake detection ML models API.
+========================
+This service provides an API for multiple machine learning models used in deepfake detection.
+It includes traditional forensic analyzers and modern convolutional network models,
+coordinated through an EnsembleDetector.
 """
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -16,15 +20,20 @@ from app.models.frequency_analyzer import FrequencyAnalyzer
 from app.models.biological_analyzer import BiologicalAnalyzer
 from app.models.ensemble import EnsembleDetector
 
-logging.basicConfig(level=logging.INFO)
+# Configure logging for service monitoring
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="DeepTrust Models Service",
-    description="ML models for deepfake detection",
+    description="Machine Learning models and ensemble detector for deepfake identification.",
     version="1.0.0"
 )
 
+# Configure CORS to allow communication from the API Gateway
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
@@ -34,7 +43,7 @@ app.add_middleware(
 )
 
 
-# Global model instances
+# Global instances of ML models. Initialized on startup to ensure availability for inference.
 mesonet = None
 xception = None
 frequency = None
@@ -44,30 +53,39 @@ ensemble = None
 
 @app.on_event("startup")
 async def startup():
+    """
+    Service startup event handler.
+    Initializes and loads weights for all deepfake detection models into memory.
+    """
     global mesonet, xception, frequency, biological, ensemble
     
     logger.info("Starting Models Service...")
-    logger.info("Loading ML models...")
+    logger.info("Loading ML models into memory...")
     
     try:
-        # Initialize all models
+        # Instantiate each model. Weight loading typically occurs within the constructor.
         mesonet = MesoNet()
         xception = XceptionNet()
         frequency = FrequencyAnalyzer()
         biological = BiologicalAnalyzer()
         
-        # Create ensemble
+        # Create an ensemble that aggregates results from the individual models
         ensemble = EnsembleDetector(mesonet, xception, frequency, biological)
         
-        logger.info("All models loaded successfully")
+        logger.info("All models loaded successfully and ready for inference")
         
     except Exception as e:
-        logger.error(f"Model loading failed: {e}")
+        logger.error(f"Critical failure during model initialization: {e}")
+        # Raising an exception here prevents the service from starting in an unhealthy state
         raise
 
 
 @app.get("/")
 async def root():
+    """
+    Service information endpoint.
+    Returns basic metadata and available endpoints for discovery.
+    """
     return {
         "message": "DeepTrust Models Service",
         "version": "1.0.0",
@@ -82,6 +100,10 @@ async def root():
 
 @app.get("/health")
 async def health():
+    """
+    Health check endpoint.
+    Verifies that all required models are successfully loaded and the service is operational.
+    """
     models_loaded = all([mesonet, xception, frequency, biological, ensemble])
     
     return {
@@ -101,20 +123,35 @@ async def health():
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """Predict if uploaded image/video is a deepfake."""
+    """
+    Main prediction endpoint using the ensemble detector.
+    
+    Args:
+        file (UploadFile): The image or frame extracted from a video for analysis.
+        
+    Returns:
+        dict: A structured dictionary containing the deepfake detection verdict, 
+              confidence scores, and individual model breakdowns.
+        
+    Raises:
+        HTTPException: 503 if models are not loaded, or 500 if inference fails.
+    """
     if not ensemble:
         raise HTTPException(status_code=503, detail="Models not loaded")
     
     try:
+        # Read file contents and convert to a PIL Image for model processing
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
         
+        # Ensure image is in RGB format, required by most CNN architectures
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
         logger.info(f"🔍 Analyzing {file.filename} ({image.size})")
         
-        # Face validation with error handling
+        # Optional: Face validation using OpenCV's Haar Cascades
+        # This provides an early exit or warning if no human face is detected.
         try:
             import cv2
             import numpy as np
@@ -128,7 +165,7 @@ async def predict(file: UploadFile = File(...)):
             faces = face_cascade.detectMultiScale(gray, 1.3, 5)
             
             if len(faces) == 0:
-                logger.warning(f"⚠️ No face detected in {file.filename}")
+                logger.warning(f"No face detected in {file.filename}")
                 return {
                     "is_deepfake": False,
                     "confidence_score": 0.0,
@@ -161,11 +198,13 @@ async def predict(file: UploadFile = File(...)):
             
             logger.info(f"✅ Detected {len(faces)} face(s)")
         except Exception as face_error:
-            logger.warning(f"⚠️ Face detection failed: {face_error}, continuing anyway...")
+            # Face detection is a non-blocking enhancement; failures are logged but inference continues
+            logger.warning(f"⚠️ Face detection module failure: {face_error}, proceeding with inference...")
         
-        # Run ensemble prediction
+        # Run consensus prediction across all loaded models
         result = ensemble.predict(image)
         
+        # Attach telemetry data about the analyzed file to the response
         result['file_info'] = {
             'filename': file.filename,
             'size': len(contents),
@@ -176,13 +215,16 @@ async def predict(file: UploadFile = File(...)):
         return result
         
     except Exception as e:
-        logger.error(f"❌ Prediction failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        logger.error(f"❌ Prediction engine failure for {file.filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Inference engine failure: {str(e)}")
 
 
 @app.post("/predict/mesonet")
 async def predict_mesonet(file: UploadFile = File(...)):
-    """MesoNet only prediction"""
+    """
+    Isolated measurement endpoint for MesoNet analysis.
+    Useful for research evaluation of texture-based detection.
+    """
     if not mesonet:
         raise HTTPException(status_code=503, detail="MesoNet not loaded")
     
@@ -192,12 +234,15 @@ async def predict_mesonet(file: UploadFile = File(...)):
         result = mesonet.predict(image)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"MesoNet execution error: {str(e)}")
 
 
 @app.post("/predict/xception")
 async def predict_xception(file: UploadFile = File(...)):
-    """XceptionNet only prediction"""
+    """
+    Isolated measurement endpoint for XceptionNet analysis.
+    Provides deep semantic feature analysis of the input image.
+    """
     if not xception:
         raise HTTPException(status_code=503, detail="XceptionNet not loaded")
     
@@ -207,12 +252,15 @@ async def predict_xception(file: UploadFile = File(...)):
         result = xception.predict(image)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"XceptionNet execution error: {str(e)}")
 
 
 @app.post("/predict/frequency")
 async def predict_frequency(file: UploadFile = File(...)):
-    """Frequency analysis only"""
+    """
+    Isolated measurement endpoint for Frequency Domain analysis.
+    Identifies high-frequency spectral artifacts characteristic of generative models.
+    """
     if not frequency:
         raise HTTPException(status_code=503, detail="Frequency analyzer not loaded")
     
@@ -222,12 +270,15 @@ async def predict_frequency(file: UploadFile = File(...)):
         result = frequency.predict(image)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Frequency analyzer execution error: {str(e)}")
 
 
 @app.post("/predict/biological")
 async def predict_biological(file: UploadFile = File(...)):
-    """Biological analysis only"""
+    """
+    Isolated measurement endpoint for Biological Consistency analysis.
+    Checks for anatomic and physiological markers that distinguish real from synthetic faces.
+    """
     if not biological:
         raise HTTPException(status_code=503, detail="Biological analyzer not loaded")
     
@@ -237,9 +288,10 @@ async def predict_biological(file: UploadFile = File(...)):
         result = biological.predict(image)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Biological analyzer execution error: {str(e)}")
 
 
 if __name__ == "__main__":
     import uvicorn
+    # Local development server entry point
     uvicorn.run(app, host="0.0.0.0", port=8003)

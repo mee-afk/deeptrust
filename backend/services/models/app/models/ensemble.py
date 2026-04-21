@@ -1,12 +1,18 @@
 """
 Ensemble Detection Engine
-Combines predictions from multiple models using weighted voting.
+=========================
+This module implements the EnsembleDetector class, which aggregates predictions 
+from multiple sub-models to provide a more robust and reliable deepfake detection verdict.
+The ensemble uses a weighted scoring mechanism based on the known performance and 
+specialization of each underlying model.
 """
+
 import numpy as np
 import logging
 from typing import Dict, Any
 from PIL import Image
 
+# Setup logger for the ensemble engine
 logger = logging.getLogger(__name__)
 
 
@@ -14,22 +20,32 @@ class EnsembleDetector:
     """
     Ensemble deepfake detection system.
     
-    Combines 4 models:
-    - MesoNet (30% weight) - Fast CNN
-    - XceptionNet (35% weight) - Powerful CNN
-    - Frequency Analyzer (20% weight) - FFT/DCT
-    - Biological Analyzer (15% weight) - Blink/symmetry
+    This class orchestrates the inference process across four specialized models:
+    - MesoNet (30% weight): Focuses on meso-layer texture analysis and compression artifacts.
+    - XceptionNet (35% weight): High-capacity CNN for capturing deep semantic facial features.
+    - Frequency Analyzer (20% weight): Statistically analyzes high-frequency spectral noise.
+    - Biological Analyzer (15% weight): Checks for biological inconsistencies like blinking or facial symmetry.
     
-    Decision: Weighted voting with confidence scores
+    The final decision is reached by calculating a weighted average of model confidence scores.
     """
     
     def __init__(self, mesonet, xception, frequency, biological):
+        """
+        Initialize the ensemble with pre-loaded model instances.
+        
+        Args:
+            mesonet: An initialized MesoNet model instance.
+            xception: An initialized XceptionNet model instance.
+            frequency: An initialized FrequencyAnalyzer instance.
+            biological: An initialized BiologicalAnalyzer instance.
+        """
         self.mesonet = mesonet
         self.xception = xception
         self.frequency = frequency
         self.biological = biological
         
-        # Model weights (must sum to 1.0)
+        # Model weights reflecting relative importance/confidence in each detector's accuracy.
+        # These weights are tuned to sum to 1.0.
         self.weights = {
             'mesonet': 0.30,
             'xception': 0.35,
@@ -37,29 +53,39 @@ class EnsembleDetector:
             'biological': 0.15
         }
         
-        logger.info("✅ Ensemble Detector initialized")
-        logger.info(f"   Weights: {self.weights}")
+        logger.info("Ensemble Detector successfully initialized")
+        logger.info(f"Active Ensemble Configuration Weights: {self.weights}")
     
     def predict(self, image: Image.Image) -> Dict[str, Any]:
         """
-        Run ensemble prediction on image.
+        Executes a consensus prediction on a single input image.
+        
+        This method triggers inference on all sub-models, aggregates their results,
+        and computes a final probability score and binary verdict.
         
         Args:
-            image: PIL Image
+            image (PIL.Image.Image): The pre-processed input image containing a human face.
             
         Returns:
-            Complete analysis with all model predictions
+            Dict[str, Any]: A comprehensive analysis response including:
+                - is_deepfake: Final boolean verdict.
+                - confidence_score: Estimated certainty (0 to 1).
+                - ensemble_score: Combined probability of the image being a deepfake.
+                - model_scores: Breakdown of raw scores from each individual model.
+                - voting: Summary of binary votes from the sub-models.
+                - model_details: Full raw output from each sub-model for deeper inspection.
         """
         try:
-            logger.info("🔍 Running ensemble detection...")
+            logger.info("Initiating ensemble inference sequence...")
             
-            # Run all models in parallel
+            # Run inference across all specialized models.
+            # While these run sequentially here, the results are captured for aggregation.
             mesonet_result = self.mesonet.predict(image)
             xception_result = self.xception.predict(image)
             frequency_result = self.frequency.predict(image)
             biological_result = self.biological.predict(image)
             
-            # Extract scores
+            # Consolidate raw probability scores from all detectors.
             scores = {
                 'mesonet': mesonet_result['score'],
                 'xception': xception_result['score'],
@@ -67,7 +93,8 @@ class EnsembleDetector:
                 'biological': biological_result['score']
             }
             
-            # Calculate weighted ensemble score
+            # Calculate the aggregate ensemble score using the predefined weights.
+            # An ensemble score closer to 1.0 indicates a high probability of a deepfake.
             ensemble_score = (
                 scores['mesonet'] * self.weights['mesonet'] +
                 scores['xception'] * self.weights['xception'] +
@@ -75,11 +102,13 @@ class EnsembleDetector:
                 scores['biological'] * self.weights['biological']
             )
             
-            # Final decision
+            # Final binary decision based on a 0.5 threshold.
             is_deepfake = ensemble_score > 0.5
-            confidence = abs(ensemble_score - 0.5) * 2  # 0-1 scale
             
-            # Voting breakdown
+            # Normalized confidence calculation: maps the distance from the decision boundary to [0, 1].
+            confidence = abs(ensemble_score - 0.5) * 2
+            
+            # Aggregate binary votes from all models for internal cross-validation.
             votes = {
                 'mesonet': mesonet_result['is_fake'],
                 'xception': xception_result['is_fake'],
@@ -90,12 +119,13 @@ class EnsembleDetector:
             votes_fake = sum(votes.values())
             votes_real = len(votes) - votes_fake
             
+            # Build the finalized result payload.
             result = {
                 'is_deepfake': bool(is_deepfake),
                 'confidence_score': float(confidence),
                 'ensemble_score': float(ensemble_score),
                 
-                # Individual model scores
+                # Distribution of scores across the ensemble.
                 'model_scores': {
                     'mesonet': float(scores['mesonet']),
                     'xception': float(scores['xception']),
@@ -103,17 +133,17 @@ class EnsembleDetector:
                     'biological': float(scores['biological'])
                 },
                 
-                # Voting breakdown
+                # Breakdown of model consensus.
                 'voting': {
                     'fake_votes': int(votes_fake),
                     'real_votes': int(votes_real),
                     'individual_votes': votes
                 },
                 
-                # Weights used
+                # Metadata on the weighting algorithm used.
                 'ensemble_weights': self.weights,
                 
-                # Detailed model outputs
+                # Passthrough of full model diagnostics for external XAI services or debugging.
                 'model_details': {
                     'mesonet': mesonet_result,
                     'xception': xception_result,
@@ -133,5 +163,5 @@ class EnsembleDetector:
                 'is_deepfake': False,
                 'confidence_score': 0.0,
                 'ensemble_score': 0.5,
-                'error': str(e)
+                'error': f"Internal ensemble error: {str(e)}"
             }

@@ -1,7 +1,11 @@
 """
-MinIO S3 Storage Service
-Handles file uploads, downloads, and URL generation.
+MinIO S3 Storage Integration
+============================
+This module encapsulates all interactions with the MinIO object storage service. 
+It provides high-level abstractions for asset persistence, programmatic retrieval, 
+and secure transient URL generation.
 """
+
 from minio import Minio
 from minio.error import S3Error
 import os
@@ -9,9 +13,11 @@ import logging
 from io import BytesIO
 from datetime import timedelta
 
+# Initialize scoped logger for storage operations
 logger = logging.getLogger(__name__)
 
-# MinIO configuration
+# Object Storage configuration parameters, sourced from environment.
+# These connect to the private MinIO service within the internal network.
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "deeptrust")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "deeptrust_dev_password")
@@ -20,15 +26,24 @@ MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 
 class StorageService:
-    """MinIO S3 storage operations"""
+    """
+    Service class responsible for S3-compatible storage operations.
+    
+    Implements a robust pattern for managing media assets, featuring lazy 
+    client initialization and automatic bucket provisioning.
+    """
     
     def __init__(self):
+        """ Initializes the service container. """
         self._client = None
         self._bucket_initialized = False
     
     @property
-    def client(self):
-        """Lazy initialize MinIO client"""
+    def client(self) -> Minio:
+        """
+        Lazy accessor for the MinIO low-level driver.
+        Ensures resources are only established when a storage operation is requested.
+        """
         if self._client is None:
             self._client = Minio(
                 MINIO_ENDPOINT,
@@ -36,23 +51,26 @@ class StorageService:
                 secret_key=MINIO_SECRET_KEY,
                 secure=MINIO_SECURE
             )
-            logger.info(f"✅ MinIO client initialized: {MINIO_ENDPOINT}")
+            logger.info(f"Persistent storage connection established at {MINIO_ENDPOINT}")
         return self._client
     
     def _ensure_bucket_exists(self):
-        """Create bucket if it doesn't exist (called on first use)"""
+        """
+        Internal safety check to confirm the target bucket is provisioned.
+        Automatically creates the primary asset bucket if missing.
+        """
         if self._bucket_initialized:
             return
             
         try:
             if not self.client.bucket_exists(MINIO_BUCKET):
                 self.client.make_bucket(MINIO_BUCKET)
-                logger.info(f"✅ Created bucket: {MINIO_BUCKET}")
+                logger.info(f"Initialized new asset bucket: {MINIO_BUCKET}")
             else:
-                logger.info(f"✅ Bucket exists: {MINIO_BUCKET}")
+                logger.info(f"Connected to existing asset bucket: {MINIO_BUCKET}")
             self._bucket_initialized = True
         except S3Error as e:
-            logger.error(f"❌ Bucket initialization failed: {e}")
+            logger.error(f"Failed to verify/initialize storage bucket: {e}")
             raise
     
     def upload_file(
@@ -62,15 +80,15 @@ class StorageService:
         content_type: str = "application/octet-stream"
     ) -> str:
         """
-        Upload file to MinIO.
+        Streams binary data into the persistent storage bucket.
         
         Args:
-            file_data: File content as bytes
-            object_name: S3 object key (path in bucket)
-            content_type: MIME type
+            file_data (bytes): The raw binary content of the media.
+            object_name (str): The unique destination key (path) within the bucket.
+            content_type (str): Explicit MIME type for correct browser handling on retrieval.
             
         Returns:
-            Object path in bucket
+            str: The internal object key of the successfully persisted file.
         """
         self._ensure_bucket_exists()
         
@@ -78,6 +96,7 @@ class StorageService:
             file_stream = BytesIO(file_data)
             file_size = len(file_data)
             
+            # Atomic upload of the binary stream
             self.client.put_object(
                 MINIO_BUCKET,
                 object_name,
@@ -86,48 +105,50 @@ class StorageService:
                 content_type=content_type
             )
             
-            logger.info(f"✅ Uploaded: {object_name} ({file_size} bytes)")
+            logger.info(f"Asset persisted successfully: {object_name} ({file_size} bytes)")
             return object_name
             
         except S3Error as e:
-            logger.error(f"❌ Upload failed: {e}")
+            logger.error(f"S3 protocol error during upload for {object_name}: {e}")
             raise
     
     def download_file(self, object_name: str) -> bytes:
         """
-        Download file from MinIO.
+        Retrieves binary data from the persistent storage bucket.
         
         Args:
-            object_name: S3 object key
+            object_name (str): The unique object key.
             
         Returns:
-            File content as bytes
+            bytes: The full content of the file.
         """
         self._ensure_bucket_exists()
         
         try:
+            # Open stream and read full binary content into memory
             response = self.client.get_object(MINIO_BUCKET, object_name)
             data = response.read()
+            # Explicit resource cleanup for the response object
             response.close()
             response.release_conn()
             
-            logger.info(f"✅ Downloaded: {object_name}")
+            logger.info(f"Asset retrieved from storage: {object_name}")
             return data
             
         except S3Error as e:
-            logger.error(f"❌ Download failed: {e}")
+            logger.error(f"S3 protocol error during retrieval for {object_name}: {e}")
             raise
     
     def get_presigned_url(self, object_name: str, expires: int = 3600) -> str:
         """
-        Generate presigned URL for file access.
+        Generates a secure, time-limited transient link for authenticated downloads.
+        
+        This allows the frontend to fetch media directly from storage without 
+        exposing private credentials or routing large binaries through the API.
         
         Args:
-            object_name: S3 object key
-            expires: URL expiry in seconds (default 1 hour)
-            
-        Returns:
-            Presigned URL
+            object_name (str): Target asset key.
+            expires (int): Seconds until the link expires. Defaults to 3600 (1 hour).
         """
         self._ensure_bucket_exists()
         
@@ -138,40 +159,44 @@ class StorageService:
                 expires=timedelta(seconds=expires)
             )
             
-            logger.info(f"✅ Generated URL for: {object_name}")
+            logger.info(f"Generated secure transient URL for: {object_name}")
             return url
             
         except S3Error as e:
-            logger.error(f"❌ URL generation failed: {e}")
+            logger.error(f"Transient URL generation failure for {object_name}: {e}")
             raise
     
     def delete_file(self, object_name: str):
         """
-        Delete file from MinIO.
+        Atomically removes an asset from persistent storage.
         
         Args:
-            object_name: S3 object key
+            object_name (str): Key of the file to prune.
         """
         self._ensure_bucket_exists()
         
         try:
             self.client.remove_object(MINIO_BUCKET, object_name)
-            logger.info(f"✅ Deleted: {object_name}")
+            logger.info(f"Asset permanently purged from storage: {object_name}")
             
         except S3Error as e:
-            logger.error(f"❌ Delete failed: {e}")
+            logger.error(f"Asset deletion failed for {object_name}: {e}")
             raise
     
     def file_exists(self, object_name: str) -> bool:
-        """Check if file exists in bucket"""
+        """ 
+        Verifies the existence of an object key within the active bucket. 
+        Utilized for integrity checks before processing requests.
+        """
         self._ensure_bucket_exists()
         
         try:
             self.client.stat_object(MINIO_BUCKET, object_name)
             return True
         except S3Error:
+            # Any S3 error (typically 404) implies the object is missing or unreachable
             return False
 
 
-# Singleton instance
+# Shared singleton instance providing storage services to the application
 storage_service = StorageService()

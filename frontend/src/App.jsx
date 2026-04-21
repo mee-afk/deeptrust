@@ -131,8 +131,10 @@ const DeepTrustDetector = () => {
         framesAnalyzed:       data.frames_analyzed,
         ensembleMax:          data.ensemble_score_max,
         singleFrameTriggered: data.single_frame_triggered,
-        mesoFakeScore:        data.mesonet?.mean_score ?? 0.5,
-        xceptFakeScore:       data.xceptionnet?.mean_score ?? 0.5,
+        // mesoFakeScore:        data.mesonet?.mean_score ?? 0.5,
+        // xceptFakeScore:       data.xceptionnet?.mean_score ?? 0.5,
+        mesoFakeScore: data.mesonet?.score ?? 0.5,
+        xceptFakeScore: data.xceptionnet?.score ?? 0.5,
         mesoFakePct:          ((data.mesonet?.mean_score ?? 0.5) * 100).toFixed(1),
         xceptFakePct:         ((data.xceptionnet?.mean_score ?? 0.5) * 100).toFixed(1),
         mesoRealPct:          ((1 - (data.mesonet?.mean_score ?? 0.5)) * 100).toFixed(1),
@@ -478,6 +480,19 @@ const DeepTrustDetector = () => {
                           </p>
                         </div>
                       </div>
+                      {results.isVideo && (
+                        <div className="mt-3 p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+                          <p className="text-xs text-amber-300 font-medium mb-1">
+                            ⚠ Experimental Feature
+                          </p>
+                          <p className="text-xs text-amber-200/70 leading-relaxed">
+                            Video analysis applies the image classifier to {results.framesAnalyzed} sampled 
+                            frames. The models were trained and validated on pre-cropped face images — 
+                            video analysis accuracy is lower than image analysis (95.52% DFDC). 
+                            For reliable results, use image analysis on extracted face frames.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
 

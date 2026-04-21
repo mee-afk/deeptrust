@@ -459,7 +459,7 @@ const DeepTrustDetector = () => {
               <div className="flex gap-3 mt-4">
                 <button onClick={analyzeMedia} disabled={analyzing}
                   className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 px-6 py-3 rounded-xl font-semibold text-sm transition-all shadow-lg active:scale-95">
-                  {analyzing ? 'Processing Inference...' : 'Begin Forensic Analysis'}
+                  {analyzing ? 'Processing Inference...' : 'Analyze Media'}
                 </button>
                 <button onClick={() => { setFile(null); setPreview(null); setResults(null); setError(null); }}
                   className="px-5 py-3 bg-white/8 hover:bg-white/15 rounded-xl text-sm transition-all">
@@ -479,7 +479,7 @@ const DeepTrustDetector = () => {
                    <div className="w-12 h-12 rounded-full border-2 border-dashed border-gray-700 flex items-center justify-center">
                       <Brain className="w-6 h-6 opacity-20"/>
                    </div>
-                   Ready for ingestion. Initiate analysis to begin.
+                   Initiate analysis to begin.
                 </div>
               )}
 
@@ -535,11 +535,12 @@ const DeepTrustDetector = () => {
                       {results.isVideo && (
                         <div className="mt-3 p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
                            <div className="flex items-center gap-1.5 text-amber-300 font-bold text-[10px] uppercase mb-1">
-                              <Info className="w-3 h-3"/> Temporal Note
+                              <Info className="w-3 h-3"/> ⚠ Experimental Feature
                            </div>
                           <p className="text-[11px] text-amber-200/70 leading-relaxed">
-                            Video inference performed across {results.framesAnalyzed} temporal samples. 
-                            Aggregated confidence reflects a cross-frame mean probability.
+                             Video analysis applies the image classifier to {results.framesAnalyzed} sampled frames. The models were trained and validated on pre-cropped face images —
+                              video analysis accuracy is lower than image analysis (95.52% DFDC).
+                              For reliable results, use image analysis on extracted face frames..
                           </p>
                         </div>
                       )}
